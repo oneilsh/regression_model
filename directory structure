@@ -1,3 +1,17 @@
+charmtwinsight_model/
+├── charmtwinsight_model/
+│   ├── __init__.py
+│   ├── data.py          # code to load & preprocess data (e.g., from FHIR, CSV)
+│   ├── model.py         # model training, prediction code
+│   └── utils.py         # helper functions
+├── tests/
+│   └── test_model.py
+├── setup.py             # for pip install
+├── requirements.txt
+├── README.md
+└── example_usage.py     # example script showing usage of the package
+
 mkdir -p twinsight_model/twinsight_model
 mkdir tests
 touch cli.py setup.py requirements.txt pyproject.toml
+
