@@ -1,0 +1,3 @@
+mkdir -p twinsight_model/twinsight_model
+mkdir tests
+touch cli.py setup.py requirements.txt pyproject.toml
