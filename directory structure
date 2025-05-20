@@ -1,15 +1,22 @@
 twinsight_model/
 ├── twinsight_model/
 │   ├── __init__.py
-│   ├── data.py          # code to load & preprocess data (e.g., from FHIR, CSV)
+│   ├── config.py
+│   ├── data_loader.py   # code to load & preprocess data (e.g., from FHIR, CSV, AOU data source)
 │   ├── model.py         # model training, prediction code
+│   ├── preprocessing.py
 │   └── utils.py         # helper functions
 ├── tests/
 │   └── test_model.py
-├── setup.py             # for pip install
-├── requirements.txt
+├── .DS_Store
 ├── README.md
-└── example_usage.py     # example script showing usage of the package
+├── cli.py
+├── directory structure
+├── model.py
+├── pyproject.toml
+├── requirement.txt
+└── setup.py             # for pip install
+
 
 mkdir -p twinsight_model/twinsight_model
 mkdir tests
