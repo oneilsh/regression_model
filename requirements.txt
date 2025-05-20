@@ -1,0 +1,12 @@
+# Core dependencies
+pandas>=1.3.0
+numpy>=1.21.0
+scikit-learn>=1.0.0
+
+# Optional but commonly used in modeling and data analysis
+matplotlib>=3.4.0       # For plotting
+seaborn>=0.11.0         # For statistical data visualization
+pyyaml>=5.4.0           # For working with YAML config files
+joblib>=1.0.0           # For model serialization
+click>=8.0.0            # For building CLI interfaces (if using CLI like `twinsight-cli`)
+tqdm>=4.62.0            # For progress bars
