@@ -1,5 +1,5 @@
-charmtwinsight_model/
-├── charmtwinsight_model/
+twinsight_model/
+├── twinsight_model/
 │   ├── __init__.py
 │   ├── data.py          # code to load & preprocess data (e.g., from FHIR, CSV)
 │   ├── model.py         # model training, prediction code
