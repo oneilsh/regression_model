@@ -1,5 +1,12 @@
 # python cli.py --data prediction_model_file.csv - Running this will pass the provided data file to twinsight-cli and handle errors
 
+
+"""
+CLI script for running the twinsight-cli command with a specified data file.
+This script parses the command-line arguments, executes the twinsight-cli command,
+and handles any errors that may occur during execution.
+"""
+
 import argparse
 import subprocess
 import sys
