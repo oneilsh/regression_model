@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 def main():
     parser = argparse.ArgumentParser(description="Twinsight CLI - Run end-to-end model pipeline.")
     parser.add_argument('--data', type=str, required=True, help='Path to the input CSV data file.')
-    parser.add_argument('--target', type=str, required=True, help='Target column name (e.g., diabetes_flag).')
+    parser.add_argument('--target', type=str, required=True, help='Target column name (e.g., condition_flag).')
     parser.add_argument('--features', type=str, nargs='+', required=True, help='List of feature column names.')
     parser.add_argument('--risk-column', type=str, required=False, help='Column used for risk stratification.')
     parser.add_argument('--risk-threshold', type=float, default=0.5, help='Threshold for stratifying risk (default: 0.5).')
