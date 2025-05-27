@@ -1,0 +1,84 @@
+outcome:
+  name: copd
+  domain: condition_occurrence
+  description: Diagnosis of chronic obstructive pulmonary disease (COPD)
+  concepts_include:
+    - 255573      # SNOMED code for COPD
+    - 321316      # SNOMED code for chronic bronchitis
+    - 312327      # SNOMED code for emphysema
+  concepts_exclude: []
+
+co_indicators:
+  - name: obesity
+    domain: condition_occurrence
+    description: Diagnosis of obesity
+    concepts_include:
+      - 4149162    # SNOMED code for obesity
+    concepts_exclude: []
+
+  - name: diabetes
+    domain: condition_occurrence
+    description: Diagnosis of type 2 diabetes mellitus
+    concepts_include:
+      - 201826     # SNOMED code for type 2 diabetes mellitus
+    concepts_exclude: []
+
+  - name: cardiovascular_disease
+    domain: condition_occurrence
+    description: History of cardiovascular diseases (e.g., heart failure, MI)
+    concepts_include:
+      - 319835     # SNOMED code for heart failure
+      - 312327     # SNOMED code for myocardial infarction
+    concepts_exclude: []
+
+features:
+  - name: smoking_status
+    domain: observation
+    type: categorical
+    description: Smoking status (never, former, current)
+    concepts_include:
+      - 4305494    # current smoker
+      - 4305495    # former smoker
+      - 4305496    # never smoked
+    concepts_exclude: []
+
+  - name: alcohol_use
+    domain: observation
+    type: binary
+    description: History of alcohol use
+    concepts_include:
+      - 4319335    # Alcohol user
+    concepts_exclude: []
+
+  - name: year_of_birth
+    domain: person
+    type: continuous
+    description: Year of birth from the person table
+
+  - name: bmi
+    domain: measurement
+    type: continuous
+    description: Body Mass Index (BMI)
+    concepts_include:
+      - 3038553    # OMOP concept ID for BMI
+
+  - name: fev1
+    domain: measurement
+    type: continuous
+    description: Forced Expiratory Volume in 1 second (FEV1)
+    concepts_include:
+      - 3017044    # OMOP concept ID for FEV1
+
+  - name: education_level
+    domain: observation
+    type: categorical
+    description: Highest education level attained
+    concepts_include:
+      - 1585249    # OMOP code for education level
+
+  - name: housing_insecurity
+    domain: observation
+    type: binary
+    description: Reported housing insecurity or instability
+    concepts_include:
+      - 765063     # OMOP concept ID for housing insecurity
