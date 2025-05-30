@@ -41,6 +41,8 @@ features:
       - 4305495    # former smoker
       - 4305496    # never smoked
     concepts_exclude: []
+    required: true
+    default: null
 
   - name: alcohol_use
     domain: observation
@@ -49,11 +51,17 @@ features:
     concepts_include:
       - 4319335    # Alcohol user
     concepts_exclude: []
+    required: true
+    default: null
 
   - name: year_of_birth
     domain: person
     type: continuous
     description: Year of birth from the person table
+    concepts_include: []    # Not applicable, but keeps structure consistent
+    concepts_exclude: []
+    required: true
+    default: null
 
   - name: bmi
     domain: measurement
@@ -61,13 +69,9 @@ features:
     description: Body Mass Index (BMI)
     concepts_include:
       - 3038553    # OMOP concept ID for BMI
+    required: true
+    default: null
 
-  - name: fev1
-    domain: measurement
-    type: continuous
-    description: Forced Expiratory Volume in 1 second (FEV1)
-    concepts_include:
-      - 3017044    # OMOP concept ID for FEV1
 
   - name: education_level
     domain: observation
@@ -75,6 +79,8 @@ features:
     description: Highest education level attained
     concepts_include:
       - 1585249    # OMOP code for education level
+    required: true
+    default: null
 
   - name: housing_insecurity
     domain: observation
@@ -82,3 +88,5 @@ features:
     description: Reported housing insecurity or instability
     concepts_include:
       - 765063     # OMOP concept ID for housing insecurity
+    required: true
+    default: null
