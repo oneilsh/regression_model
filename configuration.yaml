@@ -28,7 +28,7 @@ target_condition:
     - 7433001     # SNOMED code for Pulmonary emphysema (additional specific code)
     - 196001008   # SNOMED code for Chronic obstructive pulmonary disease with acute lower respiratory infection
     - 195951007   # SNOMED code for Acute exacerbation of chronic obstructive airways disease
-  concepts_exclude: [4288734] SNOMED code for Bronchiolar disease
+  concepts_exclude: [4288734] # SNOMED code for Bronchiolar disease
 
 # Co-morbidities or related conditions that serve as indicators alongside the target condition
 co_indicators:
