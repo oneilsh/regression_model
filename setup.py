@@ -20,10 +20,9 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            # Adjust 'twinsight_model.cli:main' if 'cli.py' is not directly
-            # inside the 'twinsight_model' package (e.g., if it's at root)
-            # If cli.py is at the root and not part of the package, it's just 'cli:main'
-            'twinsight-cli = twinsight_model.cli:main' # Assuming cli.py is in twinsight_model package
+           'twinsight-cli = cli:main' 
+    ]
+},
         ]
     },
     classifiers=[
