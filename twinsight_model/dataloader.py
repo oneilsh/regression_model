@@ -142,14 +142,23 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
     Otherwise, it returns a binary presence or a single value (e.g., for measurement).
     """
     domain_table = f"`{cdr_path}.{domain_name}`"
-    
+
+    # Determine the correct concept ID column name for the domain
+    concept_id_col_name = f"{domain_name}_concept_id" # Default
+    if domain_name == 'condition_occurrence':
+        concept_id_col_name = 'condition_concept_id'
+    elif domain_name == 'observation':
+        concept_id_col_name = 'observation_concept_id'
+    # Add other domains as needed, e.g., 'drug_exposure' might be 'drug_concept_id'
+    # For 'measurement', it's already handled separately via m.measurement_concept_id
+
     # Common where clauses for included/excluded concepts
     concept_filter_conditions = []
     if concepts_include:
-        concept_filter_conditions.append(f"{domain_name}_concept_id IN ({','.join(map(str, concepts_include))})")
+        concept_filter_conditions.append(f"t.{concept_id_col_name} IN ({','.join(map(str, concepts_include))})") # Use the determined column name
     if concepts_exclude:
-        concept_filter_conditions.append(f"{domain_name}_concept_id NOT IN ({','.join(map(str, concepts_exclude))})")
-    
+        concept_filter_conditions.append(f"t.{concept_id_col_name} NOT IN ({','.join(map(str, concepts_exclude))})") # Use the determined column name
+
     concept_filter_clause = ""
     if concept_filter_conditions:
         concept_filter_clause = f"WHERE {' AND '.join(concept_filter_conditions)}"
@@ -191,8 +200,10 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         
         sql = f"""
         SELECT
-            {', '.join(select_cols)}
-        {os.linesep.join(from_joins)}
+            DISTINCT t.person_id,
+            1 AS {column_prefix}presence
+        FROM
+            {domain_table} t
         {concept_filter_clause}
         """
         # Note: This subquery will return ALL matching conditions for ALL people.
