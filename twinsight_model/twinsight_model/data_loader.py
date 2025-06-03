@@ -5,8 +5,7 @@ from google.cloud import bigquery
 import yaml
 import os
 
-# Ensure WORKSPACE_CDR is set for local testing or in Workbench
-# For local testing, you might need to mock it:
+# Mock environment variables for local testing if not in AoU Workbench
 # os.environ["WORKSPACE_CDR"] = "all-of-us-research-workbench-####.r2023q3_unzipped_data"
 # os.environ["GOOGLE_CLOUD_PROJECT"] = "your-gcp-project-id"
 
@@ -32,38 +31,27 @@ def build_cohort_criteria_sql(concepts: List[Dict[str, Any]], cdr_path: str, ope
     """
     Builds SQL fragments for cohort inclusion/exclusion based on concepts.
     Assumes `concept_id` and `domain` are provided for each concept.
+    This uses a simplified EXISTS check against `cb_search_all_events`.
     """
     if not concepts:
         return None
 
     domain_conditions = []
-    for concept in concepts:
-        concept_id = concept.get('concept_id')
-        domain = concept.get('domain')
-        if concept_id is None or domain is None:
-            raise ValueError(f"Concept in cohort_definition must have 'concept_id' and 'domain': {concept}")
+    for concept_entry in concepts:
+        concept_id = concept_entry.get('concept_id')
+        # We don't strictly need the 'domain' here if `cb_search_all_events` is comprehensive
+        # for all event types. However, for robustness, one could check if concept_id
+        # is a valid integer.
+        if concept_id is None:
+            raise ValueError(f"Concept in cohort_definition must have 'concept_id': {concept_entry}")
 
-        # This part of the logic is complex because AoU's `cb_search_all_events`
-        # and `cb_criteria` are designed for specific cohort building.
-        # Generalizing it to just concept_id IN (...) is much simpler but less powerful
-        # than the full workbench cohort logic.
-
-        # For a truly generalized approach using the `cb_criteria` lookup logic (like your original SQL):
-        # We need to replicate that join logic for each concept. This can be cumbersome.
-        # A simpler approach for general concepts is to check directly in the domain tables
-        # or in `cb_search_all_events` if it truly contains all relevant events.
-
-        # If we need the full hierarchy traversal,
-        # then the `cb_criteria` joins would need to be re-introduced for EACH concept_id.
-        # This is why the AoU auto-generated SQL is so verbose.
-
+        # The 'operator' is either "IN" or "NOT IN" for the concept_id list
         domain_conditions.append(f"""
             EXISTS (
                 SELECT 1
                 FROM `{cdr_path}.cb_search_all_events` csae
                 WHERE csae.person_id = person.person_id
                 AND csae.concept_id {operator} ({concept_id})
-                -- You might need to add entry_date filtering here if relevant
             )
         """)
     return " OR ".join(domain_conditions)
@@ -75,7 +63,6 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
     """
     cdr_path = get_aou_cdr_path()
     
-    # Base SELECT clauses for person table
     select_clauses = [
         "person.person_id",
         "FLOOR(DATE_DIFF(DATE(CURRENT_DATE),DATE(person.birth_datetime), DAY)/365.25) AS current_age",
@@ -94,7 +81,6 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
         "person.year_of_birth"
     ]
 
-    # Base FROM and JOIN clauses for person table and its lookups
     from_join_clauses = [
         f"FROM `{cdr_path}.person` person",
         f"LEFT JOIN `{cdr_path}.concept` p_gender_concept ON person.gender_concept_id = p_gender_concept.concept_id",
@@ -105,30 +91,39 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
         f"LEFT JOIN `{cdr_path}.observation` p_observation ON person.person_id = p_observation.person_id AND p_observation.observation_concept_id = 1586099"
     ]
 
-    # Build WHERE clause based on cohort_definition in config
     where_conditions = []
     cohort_def = config.get('cohort_definition', {})
 
-    # Option 1: Direct cohort table
     cohort_table_id = cohort_def.get('cohort_table_id')
     if cohort_table_id:
         where_conditions.append(f"person.person_id IN (SELECT person_id FROM `{cdr_path}.{cohort_table_id}`)")
     else:
-        # Option 2: Include/Exclude concepts
         include_concepts = cohort_def.get('include_concepts', [])
         exclude_concepts = cohort_def.get('exclude_concepts', [])
 
         include_sql = build_cohort_criteria_sql(include_concepts, cdr_path, operator="IN")
-        exclude_sql = build_cohort_criteria_sql(exclude_concepts, cdr_path, operator="IN") # Using IN and NOT EXISTS for exclusion
+        # For exclusion, we want to ensure *none* of the exclude concepts are present.
+        # This means an AND NOT EXISTS for each exclusion criteria.
+        # A simpler way is to build the exclude SQL using 'IN' and then wrap it with NOT EXISTS for the person.
+        exclude_person_sql = build_cohort_criteria_sql(exclude_concepts, cdr_path, operator="IN")
+
 
         if include_sql:
             where_conditions.append(f"({include_sql})")
-        if exclude_sql:
-            where_conditions.append(f"NOT ({exclude_sql})") # Using NOT EXISTS for exclusion
+        if exclude_person_sql:
+            # We need to explicitly check if the person has *none* of the excluded concepts
+            # using NOT EXISTS on a subquery for person_id
+            where_conditions.append(f"""
+                person.person_id NOT IN (
+                    SELECT DISTINCT csae_excl.person_id
+                    FROM `{cdr_path}.cb_search_all_events` csae_excl
+                    WHERE csae_excl.concept_id IN ({','.join(map(str, [c['concept_id'] for c in exclude_concepts]))})
+                )
+            """)
 
-    # Add a default filter to ensure at least EHR data or similar, if no specific cohort is defined
     if not where_conditions:
-        where_conditions.append("cb_search_person.has_ehr_data = 1") # A common default for AoU studies
+        # Fallback to general EHR data presence if no specific cohort definition is given
+        where_conditions.append("cb_search_person.has_ehr_data = 1") 
 
     final_where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
 
@@ -140,55 +135,90 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
     """
     return sql_query
 
-def build_domain_query(domain_name: str, concepts_include: List[int], concepts_exclude: List[int], cdr_path: str, column_prefix: str = "") -> str:
+def build_domain_query(domain_name: str, concepts_include: List[int], concepts_exclude: List[int], cdr_path: str, column_prefix: str = "", include_all_cols: bool = False) -> str:
     """
-    Builds a SQL query for a specific domain (condition_occurrence, observation, measurement)
-    to check for the presence of specified concept IDs for each person.
-    Returns a subquery that can be joined to the person table.
+    Builds a SQL query for a specific domain.
+    If `include_all_cols` is True for 'condition_occurrence', it selects all standard columns.
+    Otherwise, it returns a binary presence or a single value (e.g., for measurement).
     """
     domain_table = f"`{cdr_path}.{domain_name}`"
-    concept_column_name = f"{domain_name}_concept_id"
-
-    value_column = ""
-    if domain_name == 'measurement':
-        value_column = ", m.value_as_number AS value_as_number"
-        concept_column_name = "measurement_concept_id" # specific to measurement table
-
-    # Construct WHERE clause for include/exclude concepts
-    include_conditions = []
+    
+    # Common where clauses for included/excluded concepts
+    concept_filter_conditions = []
     if concepts_include:
-        include_conditions.append(f"{concept_column_name} IN ({','.join(map(str, concepts_include))})")
-
-    exclude_conditions = []
+        concept_filter_conditions.append(f"{domain_name}_concept_id IN ({','.join(map(str, concepts_include))})")
     if concepts_exclude:
-        exclude_conditions.append(f"{concept_column_name} NOT IN ({','.join(map(str, concepts_exclude))})")
+        concept_filter_conditions.append(f"{domain_name}_concept_id NOT IN ({','.join(map(str, concepts_exclude))})")
+    
+    concept_filter_clause = ""
+    if concept_filter_conditions:
+        concept_filter_clause = f"WHERE {' AND '.join(concept_filter_conditions)}"
 
-    where_parts = []
-    if include_conditions:
-        where_parts.append(f"({' OR '.join(include_conditions)})")
-    if exclude_conditions:
-        where_parts.append(f"({' AND '.join(exclude_conditions)})") # AND logic for exclusions
+    if domain_name == 'condition_occurrence' and include_all_cols:
+        
+        select_cols = [
+            "c_occurrence.person_id",
+            "c_occurrence.condition_concept_id",
+            "c_standard_concept.concept_name as standard_concept_name",
+            "c_standard_concept.concept_code as standard_concept_code",
+            "c_standard_concept.vocabulary_id as standard_vocabulary",
+            "c_occurrence.condition_start_datetime",
+            "c_occurrence.condition_end_datetime",
+            "c_occurrence.condition_type_concept_id",
+            "c_type.concept_name as condition_type_concept_name",
+            "c_occurrence.stop_reason",
+            "c_occurrence.visit_occurrence_id",
+            "visit.concept_name as visit_occurrence_concept_name",
+            "c_occurrence.condition_source_value",
+            "c_occurrence.condition_source_concept_id",
+            "c_source_concept.concept_name as source_concept_name",
+            "c_source_concept.concept_code as source_concept_code",
+            "c_source_concept.vocabulary_id as source_vocabulary",
+            "c_occurrence.condition_status_source_value",
+            "c_occurrence.condition_status_concept_id",
+            "c_status.concept_name as condition_status_concept_name"
+        ]
+        
+        from_joins = [
+            f"FROM {domain_table} c_occurrence",
+            f"LEFT JOIN `{cdr_path}.concept` c_standard_concept ON c_occurrence.condition_concept_id = c_standard_concept.concept_id",
+            f"LEFT JOIN `{cdr_path}.concept` c_type ON c_occurrence.condition_type_concept_id = c_type.concept_id",
+            f"LEFT JOIN `{cdr_path}.visit_occurrence` v ON c_occurrence.visit_occurrence_id = v.visit_occurrence_id",
+            f"LEFT JOIN `{cdr_path}.concept` visit ON v.visit_concept_id = visit.concept_id",
+            f"LEFT JOIN `{cdr_path}.concept` c_source_concept ON c_occurrence.condition_source_concept_id = c_source_concept.concept_id",
+            f"LEFT JOIN `{cdr_path}.concept` c_status ON c_occurrence.condition_status_concept_id = c_status.concept_id"
+        ]
+        
+        sql = f"""
+        SELECT
+            {', '.join(select_cols)}
+        {os.linesep.join(from_joins)}
+        {concept_filter_clause}
+        """
+        # Note: This subquery will return ALL matching conditions for ALL people.
+        # The join in `load_data_from_bigquery` will filter it down to the desired cohort.
+        return sql
 
-    where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-
-    if domain_name == 'measurement':
+    elif domain_name == 'measurement':
         sql = f"""
         SELECT
             m.person_id,
             m.value_as_number AS {column_prefix}value
         FROM
             `{cdr_path}.measurement` m
-        {where_clause}
+        WHERE
+            m.measurement_concept_id IN ({','.join(map(str, concepts_include))})
+            AND m.value_as_number IS NOT NULL
         QUALIFY ROW_NUMBER() OVER (PARTITION BY m.person_id ORDER BY m.measurement_date DESC) = 1
         """
-    else: # condition_occurrence, observation (for binary/categorical presence)
+    else: # Default for condition_occurrence (binary presence), observation (binary presence)
         sql = f"""
         SELECT
             DISTINCT t.person_id,
             1 AS {column_prefix}presence
         FROM
             {domain_table} t
-        {where_clause}
+        {concept_filter_clause}
         """
     return sql
 
@@ -210,6 +240,10 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         outcome_concepts_include = outcome_config.get('concepts_include', [])
         outcome_concepts_exclude = outcome_config.get('concepts_exclude', [])
         outcome_domain = outcome_config['domain']
+        
+        # Decide if you want ALL columns for the outcome (e.g., for detailed analysis)
+        # or just a binary presence. For this example, let's keep it binary for joins.
+        # If you wanted all columns, you'd fetch the outcome_df separately or restructure the main join.
         outcome_query = build_domain_query(outcome_domain, outcome_concepts_include, outcome_concepts_exclude, cdr_path, column_prefix=f"{outcome_config['name']}_")
         join_queries.append({
             'name': outcome_config['name'],
