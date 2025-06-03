@@ -12,21 +12,21 @@ roc_auc_score
 logging.basicConfig(level=logging.INFO)
 
 def train_model(X_train, y_train, **kwargs):
-"""
-Train a logistic regression model with configurable parameters.
+    """
+    Train a logistic regression model with configurable parameters.
 
-Parameters:
+    Parameters:
     X_train (array-like): Training data features.
     y_train (array-like): Training data labels.
     **kwargs: Additional parameters for LogisticRegression.
 
-Returns:
+    Returns:
     LogisticRegression: Trained logistic regression model.
-"""
-logging.info("Initializing LogisticRegression model...")
-model = LogisticRegression(max_iter=1000, **kwargs)
-try:
-    model.fit(X_train, y_train)
+    """
+    logging.info("Initializing LogisticRegression model...")
+    model = LogisticRegression(max_iter=1000, **kwargs)
+    try:
+        model.fit(X_train, y_train)
         logging.info("Model training completed.")
     except Exception as e:
         logging.error(f"Error during model training: {e}")
