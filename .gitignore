@@ -1,0 +1,18 @@
+[B
+# Python
+__pycache__/
+*.pyc
+*.ipynb_checkpoints/
+.env
+venv/
+.pytest_cache/
+*.log
+*.joblib
+data/
+
+# macOS specific
+.DS_Store
+
+# Other non-tracked files
+file structure
+
