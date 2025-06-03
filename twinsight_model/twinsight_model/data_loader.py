@@ -53,17 +53,9 @@ def build_cohort_criteria_sql(concepts: List[Dict[str, Any]], cdr_path: str, ope
         # A simpler approach for general concepts is to check directly in the domain tables
         # or in `cb_search_all_events` if it truly contains all relevant events.
 
-        # Let's simplify to directly checking concept_id in cb_search_all_events
-        # This is less robust than the full Workbench Cohort Builder logic
-        # which traverses the concept hierarchy (path, rank, etc.).
-        # For simple inclusion/exclusion of *specific* concept IDs, this is sufficient.
-
-        # If you need the full hierarchy traversal (like in the original T2DM query),
+        # If we need the full hierarchy traversal,
         # then the `cb_criteria` joins would need to be re-introduced for EACH concept_id.
         # This is why the AoU auto-generated SQL is so verbose.
-
-        # Let's go with a simplified approach for generalization,
-        # checking `cb_search_all_events` directly.
 
         domain_conditions.append(f"""
             EXISTS (
@@ -148,11 +140,6 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
     """
     return sql_query
 
-# The rest of your functions (build_domain_query, load_data_from_bigquery, filter_columns, stratify_by_risk)
-# remain the same as in the previous good answer.
-# I'm omitting them here for brevity but they should be included in your full script.
-
-# --- Remainder of the script (same as previous good answer) ---
 def build_domain_query(domain_name: str, concepts_include: List[int], concepts_exclude: List[int], cdr_path: str, column_prefix: str = "") -> str:
     """
     Builds a SQL query for a specific domain (condition_occurrence, observation, measurement)
