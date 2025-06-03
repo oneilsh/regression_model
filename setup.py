@@ -23,8 +23,7 @@ setup(
            'twinsight-cli = cli:main' 
     ]
 },
-        ]
-    },
+
     classifiers=[
         'Development Status :: 3 - Alpha', # Consider updating as your project matures
         'Intended Audience :: Science/Research',
