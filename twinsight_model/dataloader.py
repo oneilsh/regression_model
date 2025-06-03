@@ -314,8 +314,8 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
     final_join_clauses = []
     for i, join_info in enumerate(join_queries):
         alias = f"join_tbl_{i}"
-        final_join_clauses.append(f"{join_info['type']} {alias} ON base_person.{join_info['join_col_person']} = {alias}.{join_col_subquery}")
-
+        final_join_clauses.append(f"{join_info['type']} {alias} ON base_person.{join_info['join_col_person']} = {alias}.{join_info['join_col_subquery']}")
+        
     full_sql_query = f"""
     {os.linesep.join(main_query_parts)}
     SELECT
