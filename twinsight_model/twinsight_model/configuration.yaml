@@ -6,7 +6,20 @@ outcome:
     - 255573      # SNOMED code for COPD
     - 321316      # SNOMED code for chronic bronchitis
     - 312327      # SNOMED code for emphysema
-  concepts_exclude: []
+    - 257004      # SNOMED code for Acute exacerbation of chronic obstructive airways disease
+    # More granular SNOMED child concepts for COPD and related conditions
+    - 46274062    # Asthma-chronic obstructive pulmonary disease overlap syndrome (Note: This is a very long concept ID, potentially an AOU-specific or complex SNOMED expression ID)
+    - 44791725    # Very severe chronic obstructive pulmonary disease (Note: This is a very long concept ID, potentially an AOU-specific or complex SNOMED expression ID)
+    - 313299006   # SNOMED code for Severe chronic obstructive pulmonary disease
+    - 313297008   # SNOMED code for Moderate chronic obstructive pulmonary disease
+    - 313296004   # SNOMED code for Mild chronic obstructive pulmonary disease
+    - 135836000   # SNOMED code for End stage chronic obstructive airways disease
+    - 47938003    # SNOMED code for Chronic obliterative bronchiolitis
+    - 7433001     # SNOMED code for Pulmonary emphysema (additional specific code)
+    - 196001008   # SNOMED code for Chronic obstructive pulmonary disease with acute lower respiratory infection
+    - 195951007   # SNOMED code for Acute exacerbation of chronic obstructive airways disease
+  concepts_exclude: [4288734] # SNOMED code for Bronchiolar disease
+
 
 co_indicators:
   - name: obesity
@@ -73,20 +86,20 @@ features:
     default: null
 
 
-  - name: education_level
-    domain: observation
-    type: categorical
-    description: Highest education level attained
-    concepts_include:
-      - 1585249    # OMOP code for education level
-    required: true
-    default: null
+  # - name: education_level
+  #   domain: observation
+  #   type: categorical
+  #   description: Highest education level attained
+  #   concepts_include:
+  #     - 1585249    # OMOP code for education level
+  #   required: true
+  #   default: null
 
-  - name: housing_insecurity
-    domain: observation
-    type: binary
-    description: Reported housing insecurity or instability
-    concepts_include:
-      - 765063     # OMOP concept ID for housing insecurity
-    required: true
-    default: null
+  # - name: housing_insecurity
+  #   domain: observation
+  #   type: binary
+  #   description: Reported housing insecurity or instability
+  #   concepts_include:
+  #     - 765063     # OMOP concept ID for housing insecurity
+  #   required: true
+  #   default: null
