@@ -8,7 +8,7 @@ metadata:
   created_date: "2025-05-30" # Consider automating this or updating manually
 
 # Primary target condition or outcome for this specific analysis configuration
-target_condition:
+outcome:
   name: copd
   domain: condition_occurrence
   description: Diagnosis of chronic obstructive pulmonary disease (COPD)
