@@ -56,23 +56,45 @@ co_indicators:
 
 # Individual variables or characteristics to be extracted for modeling
 features:
-  - name: smoking_status
+  - name: smoking_status_obs # Keep this one as is
     domain: observation
     type: categorical
-    description: Smoking status (never, former, current)
+    description: Smoking status from observation domain
     concepts_include:
-      - 40652439    # smoking history
-      - 45880274    # smoking answer 
-      - 1585856    # Lifestyle smoking
+      - 1585856
+      - 40652439
     concepts_exclude: []
 
-  - name: alcohol_use
-    domain: observation
-    type: binary
-    description: History of alcohol use
+  - name: smoking_status_measurement # <--- RENAMED THIS ONE!
+    domain: measurement
+    type: categorical
+    description: Smoking status from measurement domain
     concepts_include:
-      - 36310580    # Alcohol answer
-      - 433753      # Alcohol abuse
+      - 40652439
+    concepts_exclude: []
+
+  - name: smoking_status_survey # Keep this one as is
+    domain: ds_survey
+    type: categorical
+    description: Smoking status from survey answers
+    concepts_include:
+      - 45880274
+    concepts_exclude: []
+
+  - name: alcohol_use_survey
+    domain: ds_survey
+    type: binary
+    description: History of alcohol use from survey answers
+    concepts_include:
+      - 36310580    # Alcohol answer from survey
+    concepts_exclude: []
+
+  - name: alcohol_use_cond
+    domain: condition_occurrence
+    type: binary
+    description: Alcohol-related condition from condition domain
+    concepts_include:
+      - 433753      # Alcohol related condition
     concepts_exclude: []
 
   - name: year_of_birth
