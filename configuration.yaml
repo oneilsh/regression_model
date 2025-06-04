@@ -62,7 +62,6 @@ features:
     description: Smoking status from observation domain
     concepts_include:
       - 1585856
-      - 40652439
     concepts_exclude: []
 
   - name: smoking_status_measurement 
