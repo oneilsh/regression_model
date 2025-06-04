@@ -65,7 +65,7 @@ features:
       - 40652439
     concepts_exclude: []
 
-  - name: smoking_status_measurement # <--- RENAMED THIS ONE!
+  - name: smoking_status_measurement 
     domain: measurement
     type: categorical
     description: Smoking status from measurement domain
@@ -73,7 +73,7 @@ features:
       - 40652439
     concepts_exclude: []
 
-  - name: smoking_status_survey # Keep this one as is
+  - name: smoking_status_survey 
     domain: ds_survey
     type: categorical
     description: Smoking status from survey answers
