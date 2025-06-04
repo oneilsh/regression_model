@@ -36,7 +36,7 @@ co_indicators:
     domain: condition_occurrence
     description: Diagnosis of obesity
     concepts_include:
-      - 4149162    # SNOMED code for obesity
+      - 4433736    # SNOMED code for obesity
     concepts_exclude: []
 
   - name: diabetes
