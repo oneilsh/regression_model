@@ -135,10 +135,15 @@ def apply_preprocessing(
         Tuple[np.ndarray, np.ndarray]: Processed X_train and X_test as NumPy arrays.
     """
     logging.info("Applying preprocessing to training data...")
-    X_train_processed = preprocessor.fit_transform(X_train) # Fit and transform on train
-    logging.info("Applying preprocessing to test data...")
-    X_test_processed = preprocessor.transform(X_test) # Transform only on test
+    X_train_processed_sparse = preprocessor.fit_transform(X_train)
+    # Convert sparse to dense float64 NumPy array immediately
+    X_train_processed = X_train_processed_sparse.toarray().astype(np.float64)
 
-    logging.info(f"Processed X_train shape: {X_train_processed.shape}")
-    logging.info(f"Processed X_test shape: {X_test_processed.shape}")
-    return X_train_processed, X_test_processed
+    logging.info("Applying preprocessing to test data...")
+    X_test_processed_sparse = preprocessor.transform(X_test)
+    # Convert sparse to dense float64 NumPy array immediately
+    X_test_processed = X_test_processed_sparse.toarray().astype(np.float64)
+
+    logging.info(f"Processed X_train shape: {X_train_processed.shape}, dtype: {X_train_processed.dtype}")
+    logging.info(f"Processed X_test shape: {X_test_processed.shape}, dtype: {X_test_processed.dtype}")
+    return X_train_processed, X_test_processed # These are now dense float64 arrays
