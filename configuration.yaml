@@ -96,6 +96,14 @@ features:
       - 433753      # Alcohol related condition
     concepts_exclude: []
 
+  - name: alcohol_use_measurement
+    domain: measurement
+    type: binary
+    description: Alcohol-related measurement from measurement domain
+    concepts_include:
+      - 46257550      # Alcohol related measurement
+    concepts_exclude: []
+
   - name: year_of_birth
     domain: person
     type: continuous
