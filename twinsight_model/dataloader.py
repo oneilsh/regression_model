@@ -1,9 +1,12 @@
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from google.cloud import bigquery
 import yaml
 import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 # Mock environment variables for local testing if not in AoU Workbench
 # os.environ["WORKSPACE_CDR"] = "all-of-us-research-workbench-####.r2023q3_unzipped_data"
@@ -39,13 +42,9 @@ def build_cohort_criteria_sql(concepts: List[Dict[str, Any]], cdr_path: str, ope
     domain_conditions = []
     for concept_entry in concepts:
         concept_id = concept_entry.get('concept_id')
-        # We don't strictly need the 'domain' here if `cb_search_all_events` is comprehensive
-        # for all event types. However, for robustness, one could check if concept_id
-        # is a valid integer.
         if concept_id is None:
             raise ValueError(f"Concept in cohort_definition must have 'concept_id': {concept_entry}")
 
-        # The 'operator' is either "IN" or "NOT IN" for the concept_id list
         domain_conditions.append(f"""
             EXISTS (
                 SELECT 1
@@ -102,28 +101,27 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
         exclude_concepts = cohort_def.get('exclude_concepts', [])
 
         include_sql = build_cohort_criteria_sql(include_concepts, cdr_path, operator="IN")
-        # For exclusion, we want to ensure *none* of the exclude concepts are present.
-        # This means an AND NOT EXISTS for each exclusion criteria.
-        # A simpler way is to build the exclude SQL using 'IN' and then wrap it with NOT EXISTS for the person.
         exclude_person_sql = build_cohort_criteria_sql(exclude_concepts, cdr_path, operator="IN")
-
 
         if include_sql:
             where_conditions.append(f"({include_sql})")
         if exclude_person_sql:
             # We need to explicitly check if the person has *none* of the excluded concepts
             # using NOT EXISTS on a subquery for person_id
-            where_conditions.append(f"""
-                person.person_id NOT IN (
-                    SELECT DISTINCT csae_excl.person_id
-                    FROM `{cdr_path}.cb_search_all_events` csae_excl
-                    WHERE csae_excl.concept_id IN ({','.join(map(str, [c['concept_id'] for c in exclude_concepts]))})
-                )
-            """)
+            # This SQL is adapted from the original `build_person_base_query` which was robust
+            exclude_concept_ids = [c['concept_id'] for c in exclude_concepts if 'concept_id' in c]
+            if exclude_concept_ids:
+                where_conditions.append(f"""
+                    person.person_id NOT IN (
+                        SELECT DISTINCT csae_excl.person_id
+                        FROM `{cdr_path}.cb_search_all_events` csae_excl
+                        WHERE csae_excl.concept_id IN ({','.join(map(str, exclude_concept_ids))})
+                    )
+                """)
 
     if not where_conditions:
         # Fallback to general EHR data presence if no specific cohort definition is given
-        where_conditions.append("cb_search_person.has_ehr_data = 1") 
+        where_conditions.append("cb_search_person.has_ehr_data = 1")
 
     final_where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
 
@@ -141,30 +139,62 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
     If `include_all_cols` is True for 'condition_occurrence', it selects all standard columns.
     Otherwise, it returns a binary presence or a single value (e.g., for measurement).
     """
-    domain_table = f"`{cdr_path}.{domain_name}`"
+    sql = "" # Initialize sql to an empty string
+    
+    domain_table_name = domain_name
+    domain_table = f"`{cdr_path}.{domain_table_name}`"
 
     # Determine the correct concept ID column name for the domain
-    concept_id_col_name = f"{domain_name}_concept_id" # Default
+    concept_id_col_name = "" # Initialize
     if domain_name == 'condition_occurrence':
         concept_id_col_name = 'condition_concept_id'
     elif domain_name == 'observation':
         concept_id_col_name = 'observation_concept_id'
-    # Add other domains as needed, e.g., 'drug_exposure' might be 'drug_concept_id'
-    # For 'measurement', it's already handled separately via m.measurement_concept_id
+    elif domain_name == 'measurement':
+        concept_id_col_name = 'measurement_concept_id'
+    elif domain_name == 'drug_exposure':
+        concept_id_col_name = 'drug_concept_id'
+    elif domain_name == 'procedure_occurrence':
+        concept_id_col_name = 'procedure_concept_id'
+    elif domain_name == 'ds_survey': # NEW: Explicitly handle survey table
+        concept_id_col_name = 'question_concept_id' # Assuming concepts are question_concept_ids for survey
 
     # Common where clauses for included/excluded concepts
     concept_filter_conditions = []
+
+    # Handle concepts_include
     if concepts_include:
-        concept_filter_conditions.append(f"t.{concept_id_col_name} IN ({','.join(map(str, concepts_include))})") # Use the determined column name
+        concepts_str_include = ','.join(map(str, concepts_include))
+        if domain_name == 'ds_survey':
+            concept_filter_conditions.append(f"t.question_concept_id IN ({concepts_str_include})")
+        elif concept_id_col_name:
+            concept_filter_conditions.append(f"t.{concept_id_col_name} IN ({concepts_str_include})")
+        else: # Fallback if domain_name is not recognized for concept_id_col_name
+            logging.warning(f"No specific concept_id column determined for domain '{domain_name}' for inclusion. "
+                            "Concepts will not be filtered by ID for this domain.")
+            # Decide if this should lead to an error or a broader selection
+    else: # If concepts_include is empty, generate a condition that matches nothing
+        if domain_name not in ['person']: # Person domain features don't typically use concept_id IN clauses
+            concept_filter_conditions.append("FALSE") # Always evaluates to false, matching no rows
+
+    # Handle concepts_exclude
     if concepts_exclude:
-        concept_filter_conditions.append(f"t.{concept_id_col_name} NOT IN ({','.join(map(str, concepts_exclude))})") # Use the determined column name
+        concepts_str_exclude = ','.join(map(str, concepts_exclude))
+        if domain_name == 'ds_survey':
+            concept_filter_conditions.append(f"t.question_concept_id NOT IN ({concepts_str_exclude})")
+        elif concept_id_col_name:
+            concept_filter_conditions.append(f"t.{concept_id_col_name} NOT IN ({concepts_str_exclude})")
+        else: # Fallback if domain_name is not recognized for concept_id_col_name
+            logging.warning(f"No specific concept_id column determined for domain '{domain_name}' for exclusion. "
+                            "Concepts will not be filtered by ID for this domain (exclusion).")
 
     concept_filter_clause = ""
     if concept_filter_conditions:
         concept_filter_clause = f"WHERE {' AND '.join(concept_filter_conditions)}"
 
+
+    # --- Assign SQL query based on domain and options ---
     if domain_name == 'condition_occurrence' and include_all_cols:
-        
         select_cols = [
             "c_occurrence.person_id",
             "c_occurrence.condition_concept_id",
@@ -187,7 +217,7 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
             "c_occurrence.condition_status_concept_id",
             "c_status.concept_name as condition_status_concept_name"
         ]
-        
+
         from_joins = [
             f"FROM {domain_table} c_occurrence",
             f"LEFT JOIN `{cdr_path}.concept` c_standard_concept ON c_occurrence.condition_concept_id = c_standard_concept.concept_id",
@@ -197,18 +227,13 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
             f"LEFT JOIN `{cdr_path}.concept` c_source_concept ON c_occurrence.condition_source_concept_id = c_source_concept.concept_id",
             f"LEFT JOIN `{cdr_path}.concept` c_status ON c_occurrence.condition_status_concept_id = c_status.concept_id"
         ]
-        
+
         sql = f"""
         SELECT
-            DISTINCT t.person_id,
-            1 AS {column_prefix}presence
-        FROM
-            {domain_table} t
+            {', '.join(select_cols)}
+        {os.linesep.join(from_joins)}
         {concept_filter_clause}
         """
-        # Note: This subquery will return ALL matching conditions for ALL people.
-        # The join in `load_data_from_bigquery` will filter it down to the desired cohort.
-        return sql
 
     elif domain_name == 'measurement':
         sql = f"""
@@ -222,7 +247,7 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
             AND m.value_as_number IS NOT NULL
         QUALIFY ROW_NUMBER() OVER (PARTITION BY m.person_id ORDER BY m.measurement_date DESC) = 1
         """
-    else: # Default for condition_occurrence (binary presence), observation (binary presence)
+    else: # Default for binary presence for most domains including observation, ds_survey, drug_exposure, procedure_occurrence
         sql = f"""
         SELECT
             DISTINCT t.person_id,
@@ -255,6 +280,13 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         # Decide if you want ALL columns for the outcome (e.g., for detailed analysis)
         # or just a binary presence. For this example, let's keep it binary for joins.
         # If you wanted all columns, you'd fetch the outcome_df separately or restructure the main join.
+        
+        # Determine the select_col alias for the outcome
+        if outcome_domain == 'measurement':
+            select_col_alias = f"{outcome_config['name']}_value"
+        else:
+            select_col_alias = f"{outcome_config['name']}_presence"
+        
         outcome_query = build_domain_query(outcome_domain, outcome_concepts_include, outcome_concepts_exclude, cdr_path, column_prefix=f"{outcome_config['name']}_")
         join_queries.append({
             'name': outcome_config['name'],
@@ -262,7 +294,7 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
             'type': 'LEFT JOIN',
             'join_col_person': 'person_id',
             'join_col_subquery': 'person_id',
-            'select_col': f"{outcome_config['name']}_presence" if outcome_domain != 'measurement' else f"{outcome_config['name']}_value"
+            'select_col': select_col_alias
         })
 
     # Co-indicators
@@ -270,45 +302,49 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         indicator_concepts_include = indicator.get('concepts_include', [])
         indicator_concepts_exclude = indicator.get('concepts_exclude', [])
         indicator_domain = indicator['domain']
-        indicator_query = build_domain_query(indicator_domain, indicator_concepts_include, indicator_concepts_exclude, cdr_path, column_prefix=f"{indicator['name']}_")
+        indicator_name = indicator['name']
+
+        # Determine the select_col alias for indicators
+        if indicator_domain == 'measurement':
+            select_col_alias = f"{indicator_name}_value"
+        else:
+            select_col_alias = f"{indicator_name}_presence"
+
+        indicator_query = build_domain_query(indicator_domain, indicator_concepts_include, indicator_concepts_exclude, cdr_path, column_prefix=f"{indicator_name}_")
         join_queries.append({
-            'name': indicator['name'],
+            'name': indicator_name,
             'sql': indicator_query,
             'type': 'LEFT JOIN',
             'join_col_person': 'person_id',
             'join_col_subquery': 'person_id',
-            'select_col': f"{indicator['name']}_presence" if indicator_domain != 'measurement' else f"{indicator['name']}_value"
+            'select_col': select_col_alias
         })
 
     # Features (excluding person domain features which are in the base query)
     for feature in config.get('features', []):
-        if feature['domain'] == 'person':
+        if feature['domain'] == 'person': # Person domain features are directly in base_person_query
             continue
-        
+
         feature_concepts_include = feature.get('concepts_include', [])
         feature_concepts_exclude = feature.get('concepts_exclude', [])
         feature_domain = feature['domain']
-        
-        if feature['name'] == 'bmi' and feature_domain == 'measurement':
-             bmi_query = build_domain_query('measurement', feature_concepts_include, [], cdr_path, column_prefix=f"{feature['name']}_")
-             join_queries.append({
-                'name': feature['name'],
-                'sql': bmi_query,
-                'type': 'LEFT JOIN',
-                'join_col_person': 'person_id',
-                'join_col_subquery': 'person_id',
-                'select_col': f"{feature['name']}_value"
-            })
-        elif feature_domain in ['observation', 'condition_occurrence']:
-            feature_query = build_domain_query(feature_domain, feature_concepts_include, feature_concepts_exclude, cdr_path, column_prefix=f"{feature['name']}_")
-            join_queries.append({
-                'name': feature['name'],
-                'sql': feature_query,
-                'type': 'LEFT JOIN',
-                'join_col_person': 'person_id',
-                'join_col_subquery': 'person_id',
-                'select_col': f"{feature['name']}_presence"
-            })
+        feature_name = feature['name']
+
+        # Determine the select_col alias based on domain type
+        if feature_domain == 'measurement':
+            select_col_alias = f"{feature_name}_value"
+        else: # Covers observation, condition_occurrence, ds_survey, drug_exposure, procedure_occurrence, etc.
+            select_col_alias = f"{feature_name}_presence"
+
+        feature_query = build_domain_query(feature_domain, feature_concepts_include, feature_concepts_exclude, cdr_path, column_prefix=f"{feature_name}_")
+        join_queries.append({
+            'name': feature_name,
+            'sql': feature_query,
+            'type': 'LEFT JOIN',
+            'join_col_person': 'person_id',
+            'join_col_subquery': 'person_id',
+            'select_col': select_col_alias
+        })
 
 
     main_query_parts = [f"WITH base_person AS ({base_person_query})"]
@@ -326,7 +362,7 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
     for i, join_info in enumerate(join_queries):
         alias = f"join_tbl_{i}"
         final_join_clauses.append(f"{join_info['type']} {alias} ON base_person.{join_info['join_col_person']} = {alias}.{join_info['join_col_subquery']}")
-        
+
     full_sql_query = f"""
     {os.linesep.join(main_query_parts)}
     SELECT
@@ -376,25 +412,17 @@ def stratify_by_risk(df: pd.DataFrame, risk_column: str, threshold: float) -> pd
     return df
 
 if __name__ == "__main__":
+    # This block is for direct testing of the dataloader.py script
+    # It assumes environment variables are set and a config.yaml exists at root.
     config_file_path = "configuration.yaml"
 
     try:
         config = load_configuration(config_file_path)
         print("Configuration loaded successfully.")
         
-        risk_column_name = None
-        risk_threshold_value = None
+        # This part of __main__ would need updates if used directly for stratification etc.
+        # It's primarily for testing the data loading function.
         
-        for feature in config.get('features', []):
-            if feature['name'] == 'bmi':
-                risk_column_name = 'bmi'
-                # Assuming you'll add 'risk_threshold' to your BMI feature in config.yaml
-                risk_threshold_value = feature.get('risk_threshold', 25.0) 
-                break
-        
-        if not risk_column_name or risk_threshold_value is None:
-            print("Warning: No explicit risk column or threshold found in configuration for stratification. Skipping stratification.")
-            
         print("Loading data from BigQuery...")
         data_df = load_data_from_bigquery(config)
         print(f"Data loaded from BigQuery. Shape: {data_df.shape}")
@@ -402,22 +430,6 @@ if __name__ == "__main__":
         print(data_df.head())
         print("\nColumn names after loading:")
         print(data_df.columns.tolist())
-
-        filtered_df = data_df.copy()
-        print(f"\nDataFrame after initial loading. Shape: {filtered_df.shape}")
-
-        if risk_column_name and risk_threshold_value is not None:
-            if risk_column_name in filtered_df.columns:
-                stratified_df = stratify_by_risk(filtered_df, risk_column_name, risk_threshold_value)
-                print(f"\nData stratified by risk using '{risk_column_name}'. Unique risk groups: {stratified_df['risk_group'].unique()}")
-                print("Counts per risk group:")
-                print(stratified_df['risk_group'].value_counts())
-                print("\nStratified data head:")
-                print(stratified_df.head())
-            else:
-                print(f"Warning: Risk column '{risk_column_name}' not found in the loaded DataFrame. Skipping stratification.")
-        else:
-            print("Skipping stratification as risk column or threshold not fully specified in config.")
 
     except RuntimeError as e:
         print(f"A data loading or configuration error occurred: {e}")
