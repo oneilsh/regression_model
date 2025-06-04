@@ -61,9 +61,9 @@ features:
     type: categorical
     description: Smoking status (never, former, current)
     concepts_include:
-      - 4305494    # current smoker
-      - 4305495    # former smoker
-      - 4305496    # never smoked
+      - 40652439    # smoking history
+      - 45880274    # smoking answer 
+      - 1585856    # Lifestyle smoking
     concepts_exclude: []
 
   - name: alcohol_use
@@ -71,7 +71,8 @@ features:
     type: binary
     description: History of alcohol use
     concepts_include:
-      - 4319335    # Alcohol user
+      - 36310580    # Alcohol answer
+      - 433753      # Alcohol abuse
     concepts_exclude: []
 
   - name: year_of_birth
