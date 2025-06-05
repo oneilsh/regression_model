@@ -280,6 +280,41 @@ def build_observation_duration_query(cdr_path: str, column_prefix: str = "", con
     """
     return sql
 
+
+def build_condition_datetime_query(cdr_path: str, concepts_include: List[int], column_prefix: str = "") -> str:
+    """
+    Builds a SQL query to get the min condition_start_date and max condition_end_date
+    for a given set of condition concepts for each person.
+    """
+    if not concepts_include:
+        # If no concepts are provided, this query will return nothing useful,
+        # so return a query that produces an empty table with the correct schema
+        return f"""
+        SELECT
+            person_id,
+            CAST(NULL AS DATE) AS {column_prefix}min_start_date,
+            CAST(NULL AS DATE) AS {column_prefix}max_end_date
+        FROM `{cdr_path}.person`
+        WHERE FALSE
+        """
+
+    concepts_str = ','.join(map(str, concepts_include))
+
+    sql = f"""
+    SELECT
+        person_id,
+        MIN(condition_start_date) AS {column_prefix}min_start_date,
+        MAX(condition_end_date) AS {column_prefix}max_end_date
+    FROM
+        `{cdr_path}.condition_occurrence`
+    WHERE
+        condition_concept_id IN ({concepts_str})
+        AND condition_start_date IS NOT NULL
+    GROUP BY
+        person_id
+    """
+    return sql
+
 def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
     """
     Loads data from Google BigQuery based on the provided configuration,
