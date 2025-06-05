@@ -258,6 +258,22 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         """
     return sql
 
+def build_observation_duration_query(cdr_path: str, column_prefix: str = "") -> str:
+    """
+    Builds a SQL query to calculate a patient's observation duration in days
+    based on their first and last *condition* dates from the condition_occurrence table.
+    """
+    sql = f"""
+    SELECT
+        person_id,
+        DATE_DIFF(MAX(condition_end_date), MIN(condition_start_date), DAY) AS {column_prefix}duration_days
+    FROM
+        `{cdr_path}.condition_occurrence`
+    GROUP BY
+        person_id
+    """
+    return sql
+
 def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
     """
     Loads data from Google BigQuery based on the provided configuration,
