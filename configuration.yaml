@@ -105,7 +105,7 @@ features:
     concepts_exclude: []
 
    - name: condition_duration 
-    domain: condition
+    domain: condition_occurrence
     type: continuous
     description: Total observation duration in days from first to last condition event
     concepts_include: [] # No concept IDs as it's derived from events
