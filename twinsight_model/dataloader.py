@@ -266,7 +266,7 @@ def build_observation_duration_query(cdr_path: str, column_prefix: str = "") -> 
     sql = f"""
     SELECT
         person_id,
-        DATE_DIFF(MAX(condition_end_date), MIN(condition_start_date), DAY) AS {column_prefix}duration_days
+        DATE_DIFF(MAX(condition_end_datetime), MIN(condition_start_datetime), DAY) AS {column_prefix}duration_days
     FROM
         `{cdr_path}.condition_occurrence`
     GROUP BY
