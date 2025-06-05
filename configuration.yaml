@@ -104,6 +104,13 @@ features:
       - 46257550      # Alcohol related measurement
     concepts_exclude: []
 
+   - name: condition_duration 
+    domain: condition
+    type: continuous
+    description: Total observation duration in days from first to last condition event
+    concepts_include: [] # No concept IDs as it's derived from events
+    concepts_exclude: []
+
   - name: year_of_birth
     domain: person
     type: continuous
