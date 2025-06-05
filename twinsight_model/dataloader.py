@@ -172,7 +172,6 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         else: # Fallback if domain_name is not recognized for concept_id_col_name
             logging.warning(f"No specific concept_id column determined for domain '{domain_name}' for inclusion. "
                             "Concepts will not be filtered by ID for this domain.")
-            # Decide if this should lead to an error or a broader selection
     else: # If concepts_include is empty, generate a condition that matches nothing
         if domain_name not in ['person']: # Person domain features don't typically use concept_id IN clauses
             concept_filter_conditions.append("FALSE") # Always evaluates to false, matching no rows
@@ -258,17 +257,24 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         """
     return sql
 
-def build_observation_duration_query(cdr_path: str, column_prefix: str = "") -> str:
+def build_observation_duration_query(cdr_path: str, column_prefix: str = "", concepts_include: Optional[List[int]] = None) -> str:
     """
     Builds a SQL query to calculate a patient's observation duration in days
-    based on their first and last *condition* dates from the condition_occurrence table.
+    based on their first and last condition dates in condition_occurrence,
+    optionally filtered by specific concepts.
     """
+    where_clause = ""
+    if concepts_include:
+        concepts_str = ','.join(map(str, concepts_include))
+        where_clause = f"WHERE condition_concept_id IN ({concepts_str})" # Filter by condition_concept_id
+
     sql = f"""
     SELECT
         person_id,
-        DATE_DIFF(MAX(condition_end_datetime), MIN(condition_start_datetime), DAY) AS {column_prefix}duration_days
+        DATE_DIFF(MAX(condition_end_date), MIN(condition_start_date), DAY) AS {column_prefix}duration_days
     FROM
         `{cdr_path}.condition_occurrence`
+    {where_clause} # Apply the WHERE clause here
     GROUP BY
         person_id
     """
@@ -292,10 +298,6 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         outcome_concepts_include = outcome_config.get('concepts_include', [])
         outcome_concepts_exclude = outcome_config.get('concepts_exclude', [])
         outcome_domain = outcome_config['domain']
-        
-        # Decide if you want ALL columns for the outcome (e.g., for detailed analysis)
-        # or just a binary presence. For this example, let's keep it binary for joins.
-        # If you wanted all columns, you'd fetch the outcome_df separately or restructure the main join.
         
         # Determine the select_col alias for the outcome
         if outcome_domain == 'measurement':
@@ -338,13 +340,37 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
 
     # Features (excluding person domain features which are in the base query)
     for feature in config.get('features', []):
-        if feature['domain'] == 'person': # Person domain features are directly in base_person_query
-            continue
+        feature_name = feature['name']
 
+        # Handle 'observation_duration' feature specifically
+        if feature_name == 'observation_duration':
+            # Get the COPD concepts from the outcome config
+            outcome_config = config.get('outcome', {})
+            copd_concepts_include = outcome_config.get('concepts_include', []) # Get the COPD concepts
+
+            feature_query = build_observation_duration_query(
+                cdr_path,
+                column_prefix=f"{feature_name}_",
+                concepts_include=copd_concepts_include # Pass COPD concepts here!
+            )
+            join_queries.append({
+                'name': feature_name,
+                'sql': feature_query,
+                'type': 'LEFT JOIN',
+                'join_col_person': 'person_id',
+                'join_col_subquery': 'person_id',
+                'select_col': f"{feature_name}_duration_days" # This column name matches the SQL query
+            })
+            continue # Skip to the next feature in the loop, as this one is handled
+
+        # Handle other 'person' domain features that are directly in base_person_query
+        if feature['domain'] == 'person':
+            continue # These are already in the base_person_query, no separate join needed
+
+        # Handle all other features (measurement, observation, ds_survey, condition_occurrence etc.)
         feature_concepts_include = feature.get('concepts_include', [])
         feature_concepts_exclude = feature.get('concepts_exclude', [])
         feature_domain = feature['domain']
-        feature_name = feature['name']
 
         # Determine the select_col alias based on domain type
         if feature_domain == 'measurement':
