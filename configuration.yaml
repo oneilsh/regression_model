@@ -111,6 +111,20 @@ features:
     concepts_include: [] # No concept IDs as it's derived from events
     concepts_exclude: []
 
+  - name: condition_start_datetimes 
+    domain: condition_occurrence # Domain is condition_occurrence, but concepts implicitly from outcome
+    type: temporal_summary 
+    description: First recorded start date for COPD conditions.
+    concepts_include: [] # Keep empty, as concepts come from the outcome config
+    concepts_exclude: []
+
+  - name: condition_end_datetimes 
+    domain: condition_occurrence
+    type: temporal_summary
+    description: Last recorded end date for COPD conditions.
+    concepts_include: []
+    concepts_exclude: []
+
   - name: year_of_birth
     domain: person
     type: continuous
