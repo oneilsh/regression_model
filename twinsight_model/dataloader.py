@@ -12,6 +12,9 @@ logging.basicConfig(level=logging.INFO)
 # os.environ["WORKSPACE_CDR"] = "all-of-us-research-workbench-####.r2023q3_unzipped_data"
 # os.environ["GOOGLE_CLOUD_PROJECT"] = "your-gcp-project-id"
 
+# --- Keep existing functions (load_configuration, get_aou_cdr_path, build_cohort_criteria_sql, build_person_base_query) ---
+# (Place these above build_domain_query if you are replacing everything from build_domain_query downwards)
+
 def load_configuration(config_filepath: str) -> Dict[str, Any]:
     """Load configuration from a YAML file."""
     try:
@@ -106,9 +109,6 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
         if include_sql:
             where_conditions.append(f"({include_sql})")
         if exclude_person_sql:
-            # We need to explicitly check if the person has *none* of the excluded concepts
-            # using NOT EXISTS on a subquery for person_id
-            # This SQL is adapted from the original `build_person_base_query` which was robust
             exclude_concept_ids = [c['concept_id'] for c in exclude_concepts if 'concept_id' in c]
             if exclude_concept_ids:
                 where_conditions.append(f"""
@@ -120,7 +120,6 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
                 """)
 
     if not where_conditions:
-        # Fallback to general EHR data presence if no specific cohort definition is given
         where_conditions.append("cb_search_person.has_ehr_data = 1")
 
     final_where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
@@ -133,6 +132,8 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
     """
     return sql_query
 
+
+# --- build_domain_query function ---
 def build_domain_query(domain_name: str, concepts_include: List[int], concepts_exclude: List[int], cdr_path: str, column_prefix: str = "", include_all_cols: bool = False) -> str:
     """
     Builds a SQL query for a specific domain.
@@ -156,8 +157,8 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         concept_id_col_name = 'drug_concept_id'
     elif domain_name == 'procedure_occurrence':
         concept_id_col_name = 'procedure_concept_id'
-    elif domain_name == 'ds_survey': # NEW: Explicitly handle survey table
-        concept_id_col_name = 'question_concept_id' # Assuming concepts are question_concept_ids for survey
+    elif domain_name == 'ds_survey':
+        concept_id_col_name = 'question_concept_id'
 
     # Common where clauses for included/excluded concepts
     concept_filter_conditions = []
@@ -169,12 +170,12 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
             concept_filter_conditions.append(f"t.question_concept_id IN ({concepts_str_include})")
         elif concept_id_col_name:
             concept_filter_conditions.append(f"t.{concept_id_col_name} IN ({concepts_str_include})")
-        else: # Fallback if domain_name is not recognized for concept_id_col_name
+        else:
             logging.warning(f"No specific concept_id column determined for domain '{domain_name}' for inclusion. "
                             "Concepts will not be filtered by ID for this domain.")
     else: # If concepts_include is empty, generate a condition that matches nothing
-        if domain_name not in ['person']: # Person domain features don't typically use concept_id IN clauses
-            concept_filter_conditions.append("FALSE") # Always evaluates to false, matching no rows
+        if domain_name not in ['person']:
+            concept_filter_conditions.append("FALSE")
 
     # Handle concepts_exclude
     if concepts_exclude:
@@ -183,7 +184,7 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
             concept_filter_conditions.append(f"t.question_concept_id NOT IN ({concepts_str_exclude})")
         elif concept_id_col_name:
             concept_filter_conditions.append(f"t.{concept_id_col_name} NOT IN ({concepts_str_exclude})")
-        else: # Fallback if domain_name is not recognized for concept_id_col_name
+        else:
             logging.warning(f"No specific concept_id column determined for domain '{domain_name}' for exclusion. "
                             "Concepts will not be filtered by ID for this domain (exclusion).")
 
@@ -257,30 +258,34 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         """
     return sql
 
+# --- build_observation_duration_query function ---
 def build_observation_duration_query(cdr_path: str, column_prefix: str = "", concepts_include: Optional[List[int]] = None) -> str:
     """
-    Builds a SQL query to calculate a patient's observation duration in days
-    based on their first and last condition dates in condition_occurrence,
-    optionally filtered by specific concepts.
+    Builds a SQL query to calculate a patient's total observation duration in days
+    from the OMOP observation_period table.
+    Note: The 'concepts_include' parameter is ignored for this general observation period calculation
+          as observation_period is not concept-specific.
     """
-    where_clause = ""
-    if concepts_include:
-        concepts_str = ','.join(map(str, concepts_include))
-        where_clause = f"WHERE condition_concept_id IN ({concepts_str})" # Filter by condition_concept_id
-
+    if concepts_include: # Log a warning if concepts are passed but not used for this query
+        logging.warning("Concepts are provided for 'observation_duration' feature, "
+                        "but 'observation_period' table is used which is not concept-specific. "
+                        "Concepts will be ignored for this query.")
+    
     sql = f"""
     SELECT
         person_id,
-        DATE_DIFF(MAX(condition_end_date), MIN(condition_start_date), DAY) AS {column_prefix}duration_days
+        DATE_DIFF(MAX(observation_period_end_date), MIN(observation_period_start_date), DAY) AS {column_prefix}duration_days
     FROM
-        `{cdr_path}.condition_occurrence`
-    {where_clause} # Apply the WHERE clause here
+        `{cdr_path}.observation_period`
+    WHERE
+        observation_period_start_date IS NOT NULL AND observation_period_end_date IS NOT NULL
+        AND DATE_DIFF(observation_period_end_date, observation_period_start_date, DAY) >= 0
     GROUP BY
         person_id
     """
     return sql
 
-
+# --- build_condition_datetime_query function ---
 def build_condition_datetime_query(cdr_path: str, concepts_include: List[int], column_prefix: str = "") -> str:
     """
     Builds a SQL query to get the min condition_start_date and max condition_end_date
@@ -315,6 +320,8 @@ def build_condition_datetime_query(cdr_path: str, concepts_include: List[int], c
     """
     return sql
 
+
+# --- load_data_from_bigquery function ---
 def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
     """
     Loads data from Google BigQuery based on the provided configuration,
@@ -374,19 +381,26 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         })
 
     # Features (excluding person domain features which are in the base query)
+    # Maintain a set of features that have already been handled (e.g., if a pair is processed together)
+    handled_features = set()
+
     for feature in config.get('features', []):
         feature_name = feature['name']
 
+        # Skip if this feature was already handled as part of a pair
+        if feature_name in handled_features:
+            continue
+
         # Handle 'observation_duration' feature specifically
         if feature_name == 'observation_duration':
-            # Get the COPD concepts from the outcome config
+            # Get the COPD concepts from the outcome config (for filtering condition_occurrence based duration)
             outcome_config = config.get('outcome', {})
-            copd_concepts_include = outcome_config.get('concepts_include', []) # Get the COPD concepts
+            copd_concepts_include = outcome_config.get('concepts_include', [])
 
             feature_query = build_observation_duration_query(
                 cdr_path,
                 column_prefix=f"{feature_name}_",
-                concepts_include=copd_concepts_include # Pass COPD concepts here!
+                concepts_include=copd_concepts_include # Pass COPD concepts here, though they will be ignored by observation_period logic
             )
             join_queries.append({
                 'name': feature_name,
@@ -394,15 +408,58 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
                 'type': 'LEFT JOIN',
                 'join_col_person': 'person_id',
                 'join_col_subquery': 'person_id',
-                'select_col': f"{feature_name}_duration_days" # This column name matches the SQL query
+                'select_col': f"{feature_name}_duration_days"
             })
-            continue # Skip to the next feature in the loop, as this one is handled
+            handled_features.add(feature_name) # Mark as handled
+            continue
+
+        # Handle paired condition start/end datetimes (condition_start_datetimes, condition_end_datetimes)
+        elif feature_name == 'condition_start_datetimes' or feature_name == 'condition_end_datetimes':
+            # This block will be triggered by either name, but ensure the query is built only once
+            
+            # Get the COPD concepts from the outcome config for these specific dates
+            outcome_config = config.get('outcome', {})
+            copd_concepts_include = outcome_config.get('concepts_include', [])
+
+            # Build the query for min/max dates ONCE
+            # Use a consistent subquery prefix for clarity in the generated SQL
+            temp_query_prefix = "copd_condition_datetimes_"
+            condition_datetimes_query = build_condition_datetime_query(
+                cdr_path,
+                concepts_include=copd_concepts_include,
+                column_prefix=temp_query_prefix
+            )
+            
+            # Add join_query for min_start_date
+            join_queries.append({
+                'name': 'condition_start_datetimes', # This is the final column name
+                'sql': condition_datetimes_query,
+                'type': 'LEFT JOIN',
+                'join_col_person': 'person_id',
+                'join_col_subquery': 'person_id',
+                'select_col': f"{temp_query_prefix}min_start_date" # Selects the column from the subquery
+            })
+            handled_features.add('condition_start_datetimes') # Mark as handled
+
+            # Add join_query for max_end_date (using the same underlying query)
+            join_queries.append({
+                'name': 'condition_end_datetimes', # This is the final column name
+                'sql': condition_datetimes_query,
+                'type': 'LEFT JOIN',
+                'join_col_person': 'person_id',
+                'join_col_subquery': 'person_id',
+                'select_col': f"{temp_query_prefix}max_end_date" # Selects the column from the subquery
+            })
+            handled_features.add('condition_end_datetimes') # Mark as handled
+
+            continue # Both date features are handled, skip to next feature in config
+
 
         # Handle other 'person' domain features that are directly in base_person_query
         if feature['domain'] == 'person':
             continue # These are already in the base_person_query, no separate join needed
 
-        # Handle all other features (measurement, observation, ds_survey, condition_occurrence etc.)
+        # Handle all other generic features (measurement, observation, ds_survey, condition_occurrence etc.)
         feature_concepts_include = feature.get('concepts_include', [])
         feature_concepts_exclude = feature.get('concepts_exclude', [])
         feature_domain = feature['domain']
