@@ -12,9 +12,6 @@ logging.basicConfig(level=logging.INFO)
 # os.environ["WORKSPACE_CDR"] = "all-of-us-research-workbench-####.r2023q3_unzipped_data"
 # os.environ["GOOGLE_CLOUD_PROJECT"] = "your-gcp-project-id"
 
-# --- Keep existing functions (load_configuration, get_aou_cdr_path, build_cohort_criteria_sql, build_person_base_query) ---
-# (Place these above build_domain_query if you are replacing everything from build_domain_query downwards)
-
 def load_configuration(config_filepath: str) -> Dict[str, Any]:
     """Load configuration from a YAML file."""
     try:
@@ -133,12 +130,62 @@ def build_person_base_query(config: Dict[str, Any]) -> str:
     return sql_query
 
 
-# --- build_domain_query function ---
-def build_domain_query(domain_name: str, concepts_include: List[int], concepts_exclude: List[int], cdr_path: str, column_prefix: str = "", include_all_cols: bool = False) -> str:
+# --- NEW HELPER: Build SQL for Ancestor Descendants ---
+def _build_ancestor_descendant_sql(cdr_path: str, ancestor_concept_ids: List[int]) -> str:
+    """
+    Builds a SQL subquery to select all descendant concept IDs for given ancestor concept IDs
+    using cb_criteria_ancestor and cb_criteria.
+    This pattern is adapted from the user's provided SQL snippet, assuming is_standard=1 and is_selectable=1.
+    """
+    if not ancestor_concept_ids:
+        # Return a subquery that yields no concepts if no ancestors provided (e.g., for empty include)
+        return "SELECT concept_id FROM `dummy_table` WHERE FALSE" 
+
+    ancestor_ids_str = ','.join(map(str, ancestor_concept_ids))
+
+    # This SQL matches the user's provided snippet's inner ancestor logic
+    # Note: `is_standard = 1 AND is_selectable = 1` is hardcoded as per your snippet's general use.
+    sql = f"""
+    SELECT
+        DISTINCT ca.descendant_id
+    FROM
+        `{cdr_path}.cb_criteria_ancestor` ca
+    JOIN
+        (
+            SELECT
+                DISTINCT c.concept_id
+            FROM
+                `{cdr_path}.cb_criteria` c
+            JOIN
+                (
+                    SELECT
+                        cast(cr.id as string) as id
+                    FROM
+                        `{cdr_path}.cb_criteria` cr
+                    WHERE
+                        concept_id IN ({ancestor_ids_str})
+                        AND full_text LIKE '%_rank1]%'
+                ) a
+                ON (
+                    c.path LIKE CONCAT('%.', a.id, '.%')
+                    OR c.path LIKE CONCAT('%.', a.id)
+                    OR c.path LIKE CONCAT(a.id, '.%')
+                    OR c.path = a.id
+                )
+            WHERE
+                is_standard = 1
+                AND is_selectable = 1
+        ) b
+        ON (ca.ancestor_id = b.concept_id)
+    """
+    return sql
+
+
+# --- build_domain_query function (MODIFIED) ---
+def build_domain_query(domain_name: str, concepts_include: List[int], concepts_exclude: List[int], cdr_path: str, column_prefix: str = "", include_all_cols: bool = False, map_to_descendants: bool = False) -> str:
     """
     Builds a SQL query for a specific domain.
-    If `include_all_cols` is True for 'condition_occurrence', it selects all standard columns.
-    Otherwise, it returns a binary presence or a single value (e.g., for measurement).
+    Optionally includes descendant concepts via ancestor mapping.
     """
     sql = "" # Initialize sql to an empty string
     
@@ -153,7 +200,7 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         concept_id_col_name = 'observation_concept_id'
     elif domain_name == 'measurement':
         concept_id_col_name = 'measurement_concept_id'
-    elif domain_name == 'drug_exposure':
+    elif domain_name == 'drug_exposure': # Add drug_exposure here
         concept_id_col_name = 'drug_concept_id'
     elif domain_name == 'procedure_occurrence':
         concept_id_col_name = 'procedure_concept_id'
@@ -163,21 +210,30 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
     # Common where clauses for included/excluded concepts
     concept_filter_conditions = []
 
-    # Handle concepts_include
+    # Determine the concepts to filter by (either direct or from ancestor subquery)
+    concepts_to_filter_by_include_sql = "NULL" # Default if no concepts or ancestor
     if concepts_include:
-        concepts_str_include = ','.join(map(str, concepts_include))
+        if map_to_descendants: # NEW LOGIC: Use concepts_include as ancestor IDs to get descendants
+            ancestor_subquery_sql = _build_ancestor_descendant_sql(cdr_path, concepts_include) # Use concepts_include as ancestor IDs
+            concepts_to_filter_by_include_sql = f"({ancestor_subquery_sql})" # Wrap in parentheses for IN clause
+        else: # Standard direct concept filtering
+            concepts_to_filter_by_include_sql = ','.join(map(str, concepts_include))
+
+    # Handle concepts_include (adapted for ancestor logic)
+    if concepts_include or (ancestor_concepts and map_to_descendants): # Check if concepts_include or ancestor_concepts (if map_to_descendants is used for ancestor_concepts)
         if domain_name == 'ds_survey':
-            concept_filter_conditions.append(f"t.question_concept_id IN ({concepts_str_include})")
+            concept_filter_conditions.append(f"t.question_concept_id IN ({concepts_to_filter_by_include_sql})")
         elif concept_id_col_name:
-            concept_filter_conditions.append(f"t.{concept_id_col_name} IN ({concepts_str_include})")
+            concept_filter_conditions.append(f"t.{concept_id_col_name} IN ({concepts_to_filter_by_include_sql})")
         else:
-            logging.warning(f"No specific concept_id column determined for domain '{domain_name}' for inclusion. "
+            logging.warning(f"No specific concept_id column determined for domain '{domain_name}' for inclusion with concepts/ancestors. "
                             "Concepts will not be filtered by ID for this domain.")
-    else: # If concepts_include is empty, generate a condition that matches nothing
+    else: # If no direct concepts AND no ancestor concepts (if map_to_descendants is used for ancestor_concepts), generate FALSE
         if domain_name not in ['person']:
             concept_filter_conditions.append("FALSE")
 
-    # Handle concepts_exclude
+
+    # Handle concepts_exclude (currently only direct concepts_exclude are supported)
     if concepts_exclude:
         concepts_str_exclude = ','.join(map(str, concepts_exclude))
         if domain_name == 'ds_survey':
@@ -243,7 +299,7 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         FROM
             `{cdr_path}.measurement` m
         WHERE
-            m.measurement_concept_id IN ({','.join(map(str, concepts_include))})
+            m.measurement_concept_id IN ({concepts_to_filter_by_include})
             AND m.value_as_number IS NOT NULL
         QUALIFY ROW_NUMBER() OVER (PARTITION BY m.person_id ORDER BY m.measurement_date DESC) = 1
         """
@@ -266,7 +322,7 @@ def build_observation_duration_query(cdr_path: str, column_prefix: str = "", con
     Note: The 'concepts_include' parameter is ignored for this general observation period calculation
           as observation_period is not concept-specific.
     """
-    if concepts_include: # Log a warning if concepts are passed but not used for this query
+    if concepts_include:
         logging.warning("Concepts are provided for 'observation_duration' feature, "
                         "but 'observation_period' table is used which is not concept-specific. "
                         "Concepts will be ignored for this query.")
@@ -292,8 +348,6 @@ def build_condition_datetime_query(cdr_path: str, concepts_include: List[int], c
     for a given set of condition concepts for each person.
     """
     if not concepts_include:
-        # If no concepts are provided, this query will return nothing useful,
-        # so return a query that produces an empty table with the correct schema
         return f"""
         SELECT
             person_id,
@@ -320,6 +374,8 @@ def build_condition_datetime_query(cdr_path: str, concepts_include: List[int], c
     """
     return sql
 
+# --- _build_ancestor_descendant_sql function ---
+# (already provided earlier, placed here for completeness)
 
 # --- load_data_from_bigquery function ---
 def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
@@ -340,6 +396,7 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         outcome_concepts_include = outcome_config.get('concepts_include', [])
         outcome_concepts_exclude = outcome_config.get('concepts_exclude', [])
         outcome_domain = outcome_config['domain']
+        outcome_map_to_descendants = outcome_config.get('map_to_descendants', False) # NEW: get map_to_descendants flag
         
         # Determine the select_col alias for the outcome
         if outcome_domain == 'measurement':
@@ -347,7 +404,7 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         else:
             select_col_alias = f"{outcome_config['name']}_presence"
         
-        outcome_query = build_domain_query(outcome_domain, outcome_concepts_include, outcome_concepts_exclude, cdr_path, column_prefix=f"{outcome_config['name']}_")
+        outcome_query = build_domain_query(outcome_domain, outcome_concepts_include, outcome_concepts_exclude, cdr_path, column_prefix=f"{outcome_config['name']}_", map_to_descendants=outcome_map_to_descendants) # Pass map_to_descendants
         join_queries.append({
             'name': outcome_config['name'],
             'sql': outcome_query,
@@ -363,6 +420,7 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         indicator_concepts_exclude = indicator.get('concepts_exclude', [])
         indicator_domain = indicator['domain']
         indicator_name = indicator['name']
+        indicator_map_to_descendants = indicator.get('map_to_descendants', False) # NEW: get map_to_descendants flag
 
         # Determine the select_col alias for indicators
         if indicator_domain == 'measurement':
@@ -370,7 +428,7 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         else:
             select_col_alias = f"{indicator_name}_presence"
 
-        indicator_query = build_domain_query(indicator_domain, indicator_concepts_include, indicator_concepts_exclude, cdr_path, column_prefix=f"{indicator_name}_")
+        indicator_query = build_domain_query(indicator_domain, indicator_concepts_include, indicator_concepts_exclude, cdr_path, column_prefix=f"{indicator_name}_", map_to_descendants=indicator_map_to_descendants) # Pass map_to_descendants
         join_queries.append({
             'name': indicator_name,
             'sql': indicator_query,
@@ -408,9 +466,9 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
                 'type': 'LEFT JOIN',
                 'join_col_person': 'person_id',
                 'join_col_subquery': 'person_id',
-                'select_col': f"{feature_name}_duration_days"
+                'select_col': f"{feature_name}_duration_days" # This column name matches the SQL query
             })
-            handled_features.add(feature_name) # Mark as handled
+            handled_features.add(feature_name)
             continue
 
         # Handle paired condition start/end datetimes (condition_start_datetimes, condition_end_datetimes)
@@ -439,7 +497,7 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
                 'join_col_subquery': 'person_id',
                 'select_col': f"{temp_query_prefix}min_start_date" # Selects the column from the subquery
             })
-            handled_features.add('condition_start_datetimes') # Mark as handled
+            handled_features.add('condition_start_datetimes')
 
             # Add join_query for max_end_date (using the same underlying query)
             join_queries.append({
@@ -450,27 +508,28 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
                 'join_col_subquery': 'person_id',
                 'select_col': f"{temp_query_prefix}max_end_date" # Selects the column from the subquery
             })
-            handled_features.add('condition_end_datetimes') # Mark as handled
+            handled_features.add('condition_end_datetimes')
 
-            continue # Both date features are handled, skip to next feature in config
+            continue
 
 
         # Handle other 'person' domain features that are directly in base_person_query
         if feature['domain'] == 'person':
-            continue # These are already in the base_person_query, no separate join needed
+            continue
 
         # Handle all other generic features (measurement, observation, ds_survey, condition_occurrence etc.)
         feature_concepts_include = feature.get('concepts_include', [])
         feature_concepts_exclude = feature.get('concepts_exclude', [])
         feature_domain = feature['domain']
+        feature_map_to_descendants = feature.get('map_to_descendants', False) # NEW LINE for ancestor support
 
         # Determine the select_col alias based on domain type
         if feature_domain == 'measurement':
             select_col_alias = f"{feature_name}_value"
-        else: # Covers observation, condition_occurrence, ds_survey, drug_exposure, procedure_occurrence, etc.
+        else:
             select_col_alias = f"{feature_name}_presence"
 
-        feature_query = build_domain_query(feature_domain, feature_concepts_include, feature_concepts_exclude, cdr_path, column_prefix=f"{feature_name}_")
+        feature_query = build_domain_query(feature_domain, feature_concepts_include, feature_concepts_exclude, cdr_path, column_prefix=f"{feature_name}_", map_to_descendants=feature_map_to_descendants) # Pass map_to_descendants
         join_queries.append({
             'name': feature_name,
             'sql': feature_query,
