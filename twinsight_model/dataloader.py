@@ -299,7 +299,7 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
         FROM
             `{cdr_path}.measurement` m
         WHERE
-            m.measurement_concept_id IN ({concepts_to_filter_by_include})
+             m.measurement_concept_id IN ({concepts_to_filter_by_include_sql})
             AND m.value_as_number IS NOT NULL
         QUALIFY ROW_NUMBER() OVER (PARTITION BY m.person_id ORDER BY m.measurement_date DESC) = 1
         """
