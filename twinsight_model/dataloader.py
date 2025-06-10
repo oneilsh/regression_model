@@ -220,7 +220,7 @@ def build_domain_query(domain_name: str, concepts_include: List[int], concepts_e
             concepts_to_filter_by_include_sql = ','.join(map(str, concepts_include))
 
     # Handle concepts_include (adapted for ancestor logic)
-    if concepts_include or (ancestor_concepts and map_to_descendants): # Check if concepts_include or ancestor_concepts (if map_to_descendants is used for ancestor_concepts)
+    if concepts_include: # Check if concepts_include or ancestor_concepts (if map_to_descendants is used for ancestor_concepts)
         if domain_name == 'ds_survey':
             concept_filter_conditions.append(f"t.question_concept_id IN ({concepts_to_filter_by_include_sql})")
         elif concept_id_col_name:
