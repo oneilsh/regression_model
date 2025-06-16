@@ -11,6 +11,7 @@ twinsight_model/
 ├── .DS_Store
 ├── README.md
 ├── cli.py
+├── configuration.yaml
 ├── directory structure
 ├── model.py
 ├── pyproject.toml
