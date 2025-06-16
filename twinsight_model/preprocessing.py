@@ -10,6 +10,46 @@ from sklearn.pipeline import Pipeline
 
 logging.basicConfig(level=logging.INFO)
 
+class OutlierCapper(BaseEstimator, TransformerMixin):
+    """
+    A custom transformer to cap outliers in numerical features based on quantiles.
+    Values below lower_bound_quantile are capped at lower_bound_quantile_value.
+    Values above upper_bound_quantile are capped at upper_bound_quantile_value.
+    """
+    def __init__(self, lower_bound_quantile=0.01, upper_bound_quantile=0.99):
+        self.lower_bound_quantile = lower_bound_quantile
+        self.upper_bound_quantile = upper_bound_quantile
+        self.lower_bound_values = {}
+        self.upper_bound_values = {}
+
+    def fit(self, X, y=None):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X) # Ensure X is a DataFrame for quantile calculation
+
+        for col in X.columns:
+            if pd.api.types.is_numeric_dtype(X[col]):
+                self.lower_bound_values[col] = X[col].quantile(self.lower_bound_quantile)
+                self.upper_bound_values[col] = X[col].quantile(self.upper_bound_quantile)
+            else:
+                self.lower_bound_values[col] = None
+                self.upper_bound_values[col] = None
+        logging.info(f"OutlierCapper fitted. Lower bounds: {self.lower_bound_values}, Upper bounds: {self.upper_bound_values}")
+        return self
+
+    def transform(self, X):
+        X_transformed = X.copy()
+        if not isinstance(X_transformed, pd.DataFrame):
+            X_transformed = pd.DataFrame(X_transformed, columns=X.columns if hasattr(X, 'columns') else None)
+
+        for col in X_transformed.columns:
+            if pd.api.types.is_numeric_dtype(X_transformed[col]) and col in self.lower_bound_values and self.lower_bound_values[col] is not None:
+                # Cap values
+                X_transformed[col] = np.clip(X_transformed[col],
+                                             a_min=self.lower_bound_values[col],
+                                             a_max=self.upper_bound_values[col])
+        logging.info("OutlierCapper transformed data.")
+        return X_transformed
+        
 def split_data(
     df: pd.DataFrame,
     target_column: str,
