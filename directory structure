@@ -2,7 +2,7 @@ twinsight_model/
 ├── twinsight_model/
 │   ├── __init__.py
 │   ├── config.py
-│   ├── data_loader.py   # code to load & preprocess data (e.g., from FHIR, CSV, AOU data source)
+│   ├── dataloader.py   # code to load & preprocess data (e.g., from FHIR, CSV, AOU data source)
 │   ├── model.py         # model training, prediction code
 │   ├── preprocessing.py
 │   └── utils.py         # helper functions
@@ -13,7 +13,6 @@ twinsight_model/
 ├── cli.py
 ├── configuration.yaml
 ├── directory structure
-├── model.py
 ├── pyproject.toml
 ├── requirement.txt
 └── setup.py             # for pip install
