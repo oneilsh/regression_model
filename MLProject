@@ -1,0 +1,15 @@
+# regression_model/MLproject
+name: COPD_Prediction_Model
+
+conda_env: conda.yaml # Refers to the conda.yaml file in the same directory
+
+entry_points:
+  main:
+    # Command to run your main model training script
+    # Assuming train.py or model.py is your primary entry for training
+    command: "python twinsight_model/model.py"
+    # Add parameters here if your model.py takes command-line arguments
+    # parameters:
+    #   learning_rate: {type: float, default: 0.001}
+    #   epochs: {type: int, default: 10}
+    # command: "python twinsight_model/model.py --learning-rate {learning_rate} --epochs {epochs}"
