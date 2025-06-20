@@ -1,0 +1,15 @@
+# regression_model/conda.yaml
+name: copd_prediction_env
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.9 # Match your specific Python version
+  - pandas
+  - numpy
+  - scikit-learn
+  - pip
+  - pip:
+    - mlflow
+    - lifelines
+    # Add any other project-specific pip dependencies here
