@@ -321,15 +321,16 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
 
     # --- Step 5: Derive Outcome (time_to_event_days, event_observed) ---
     logging.info("Step 5: Deriving time_to_event_days and event_observed...")
-    # Convert time_0 to datetime objects for calculation
-    person_df['time_0_dt'] = pd.to_datetime(person_df['time_0'])
-    person_df['obs_end_dt'] = pd.to_datetime(person_df['observation_period_end_date'])
-    person_df['actual_outcome_dt'] = pd.to_datetime(person_df['actual_outcome_datetime'])
+    # Convert time_0, obs_end, and actual_outcome to datetime objects and make them timezone-naive
+    person_df['time_0_dt'] = pd.to_datetime(person_df['time_0']).dt.tz_localize(None) # Make timezone-naive
+    person_df['obs_end_dt'] = pd.to_datetime(person_df['observation_period_end_date']).dt.tz_localize(None) # Make timezone-naive
+    person_df['actual_outcome_dt'] = pd.to_datetime(person_df['actual_outcome_datetime']).dt.tz_localize(None) # Make timezone-naive
 
 
     # Calculate event_observed (1 if outcome occurred AFTER time_0, 0 otherwise)
     # The 'actual_outcome_dt' here is the first outcome overall, which we know is >= time_0 due to filtering
     person_df['event_observed'] = person_df['actual_outcome_dt'].notna().astype(int)
+
 
     # Calculate time_to_event (duration from time_0 to event or censoring)
     # If event occurred: time_to_event = outcome_dt - time_0_dt
@@ -337,11 +338,11 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
     
     # Ensure time_to_event is at least 1 day (or a small positive number) for lifelines
     time_to_event_raw = np.where(
-        person_df['event_observed'] == 1,
-        (person_df['actual_outcome_dt'] - person_df['time_0_dt']).dt.days,
-        (person_df['obs_end_dt'] - person_df['time_0_dt']).dt.days
+    person_df['event_observed'] == 1,
+    (person_df['actual_outcome_dt'] - person_df['time_0_dt']).dt.days,
+    (person_df['obs_end_dt'] - person_df['time_0_dt']).dt.days
     )
-    person_df['time_to_event_days'] = np.maximum(time_to_event_raw, 1).astype(float) # Ensure positive and float
+    person_df['time_to_event_days'] = np.maximum(time_to_event_raw, 1).astype(float)
     logging.info("Time-to-event and event_observed derived.")
     logging.info(f"Derived outcomes: min_time={person_df['time_to_event_days'].min()}, max_time={person_df['time_to_event_days'].max()}, events={person_df['event_observed'].sum()}")
 
