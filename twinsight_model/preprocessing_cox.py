@@ -13,61 +13,52 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__) # Use logger for consistency
 
 class OutlierCapper(BaseEstimator, TransformerMixin):
-    """
-    A custom transformer to cap outliers in numerical features based on quantiles.
-    Values below lower_bound_quantile are capped at lower_bound_quantile_value.
-    Values above upper_bound_quantile are capped at upper_bound_quantile_value.
-    This helps in robust scaling and model stability, especially for features like BMI.
-    """
-    def __init__(self, lower_bound_quantile=0.01, upper_bound_quantile=0.99):
+    def __init__(self, lower_bound_quantile=None, upper_bound_quantile=None):
+        # Store the quantile parameters
         self.lower_bound_quantile = lower_bound_quantile
         self.upper_bound_quantile = upper_bound_quantile
+
+        # These will store the *calculated* bounds after fitting
         self.lower_bound_values = {}
         self.upper_bound_values = {}
 
     def fit(self, X, y=None):
         if not isinstance(X, pd.DataFrame):
-            # Attempt to convert to DataFrame, assuming column names might be lost
-            # from previous steps (e.g., from numpy array output of ColumnTransformer).
-            # If X is already an array, we need to ensure it has columns for quantile.
-            # However, this capper is designed to run *before* OneHotEncoder, so X should be DataFrame.
-            logger.warning("OutlierCapper received non-DataFrame input. Attempting conversion.")
-            X = pd.DataFrame(X, columns=[f'col_{i}' for i in range(X.shape[1])]) # Dummy columns if none
+            # Convert to DataFrame if it's a Series or array for consistent handling
+            X = pd.DataFrame(X)
 
         for col in X.columns:
-            if pd.api.types.is_numeric_dtype(X[col]):
-                # Only calculate bounds for non-null values
+            # Only calculate for numerical columns and if quantiles are specified
+            if pd.api.types.is_numeric_dtype(X[col]) and self.lower_bound_quantile is not None and self.upper_bound_quantile is not None:
+                # Calculate bounds based on quantiles
                 self.lower_bound_values[col] = X[col].quantile(self.lower_bound_quantile)
                 self.upper_bound_values[col] = X[col].quantile(self.upper_bound_quantile)
             else:
-                self.lower_bound_values[col] = None # Store None for non-numeric columns
+                # If no quantiles, or not numeric, don't cap
+                self.lower_bound_values[col] = None
                 self.upper_bound_values[col] = None
-        logger.info(f"OutlierCapper fitted for numeric columns. Lower bounds: {self.lower_bound_values}, Upper bounds: {self.upper_bound_values}")
         return self
 
     def transform(self, X):
-        X_transformed = X.copy()
-        if not isinstance(X_transformed, pd.DataFrame):
-            logger.warning("OutlierCapper received non-DataFrame input for transform. Attempting conversion.")
-            # If X_transformed is a numpy array, it needs to retain column names from fit.
-            # This is why OutlierCapper should ideally be applied before ColumnTransformer converts to numpy.
-            # Assuming columns from fit are available, or passed via context.
-            if hasattr(X, 'columns'):
-                X_transformed = pd.DataFrame(X_transformed, columns=X.columns)
-            else:
-                # This path indicates a potential issue in the pipeline ordering
-                logger.error("OutlierCapper received a NumPy array without column names for transform. Skipping outlier capping.")
-                return X_transformed # Return unchanged if columns are unknown
+        if not isinstance(X, pd.DataFrame):
+            X_transformed = pd.DataFrame(X, columns=[X.name]) if isinstance(X, pd.Series) else pd.DataFrame(X)
+        else:
+            X_transformed = X.copy()
 
         for col in X_transformed.columns:
-            if pd.api.types.is_numeric_dtype(X_transformed[col]) and col in self.lower_bound_values and self.lower_bound_values[col] is not None:
-                # Apply clipping, handling potential NaNs gracefully
+            if col in self.lower_bound_values and self.lower_bound_values[col] is not None:
                 X_transformed[col] = X_transformed[col].clip(
-                    lower=self.lower_bound_values[col],
-                    upper=self.upper_bound_values[col]
+                    self.lower_bound_values[col],
+                    self.upper_bound_values[col]
                 )
-        logger.info("OutlierCapper transformed data.")
         return X_transformed
+
+    def get_feature_names_out(self, input_features=None):
+        if input_features is None:
+            if hasattr(self, '_feature_names_in'): # If you store input names from fit
+                return self._feature_names_in
+            return list(self.lower_bound_values.keys()) # Or based on fitted columns
+        return list(input_features) # Assume output features are same as input
         
 def split_data(
     df: pd.DataFrame,
@@ -147,59 +138,61 @@ def split_data(
     # Return features as DataFrames and duration/event as Series
     return X_train, duration_train, event_train, X_test, duration_test, event_test
 
-def create_preprocessor(X_train: pd.DataFrame) -> Pipeline:
+def create_preprocessor(X_train: pd.DataFrame) -> ColumnTransformer:
     """
     Creates and fits a scikit-learn preprocessing pipeline based on the training data.
     This pipeline handles numerical imputation/scaling, outlier capping, and categorical one-hot encoding.
-
-    Parameters:
-        X_train (pd.DataFrame): The training features DataFrame, used to fit the preprocessor.
-
-    Returns:
-        sklearn.pipeline.Pipeline: A fitted preprocessing pipeline (ColumnTransformer).
     """
     logger.info("Creating feature preprocessing pipeline...")
 
-    # Identify numeric and categorical features
-    # Ensure numeric_features explicitly handles float, int types, and excludes object/category
+    # Ensure dtypes are correct for proper feature identification
+    # Convert binary/categorical-like ints to category if they should be
+    for col in ['gender', 'race', 'ethnicity', 'sex_at_birth', 'smoking_status', 'alcohol_use', 'obesity', 'diabetes', 'cardiovascular_disease']:
+        if col in X_train.columns:
+            if X_train[col].dtype == 'object': # Already string/object, convert to category
+                X_train[col] = X_train[col].astype('category')
+            elif pd.api.types.is_integer_dtype(X_train[col]) and len(X_train[col].dropna().unique()) <= 2: # Integer 0/1, convert to category
+                X_train[col] = X_train[col].astype('category')
+            # Handle floats that might be binary/categorical but appear float due to NaNs
+            elif pd.api.types.is_float_dtype(X_train[col]) and len(X_train[col].dropna().unique()) <=2 and all(x in [0.0, 1.0] for x in X_train[col].dropna().unique()):
+                X_train[col] = X_train[col].astype('category')
+
+
     numeric_features = X_train.select_dtypes(include=np.number).columns.tolist()
     categorical_features = X_train.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
     
-    # Remove any columns from numeric_features that might accidentally be boolean or object if type detection isn't perfect
-    numeric_features = [f for f in numeric_features if X_train[f].dtype != 'object' and X_train[f].dtype != 'category' and X_train[f].dtype != 'bool']
-    # Add booleans to categorical features for one-hot encoding if needed
-    for f in X_train.select_dtypes(include='bool').columns.tolist():
-        if f not in categorical_features:
-            categorical_features.append(f)
+    # Filter out any non-numeric from numeric_features if they sneaked in,
+    # and ensure boolean is not numeric for these purposes.
+    numeric_features = [f for f in numeric_features if X_train[f].dtype not in ['object', 'category', 'bool']]
+    
+    # Remove any categorical features from numeric_features list that might have been picked up initially
+    numeric_features = [f for f in numeric_features if f not in categorical_features]
 
 
     if not numeric_features and not categorical_features:
         logger.warning("No numeric or categorical features identified for preprocessing. Returning a dummy preprocessor.")
-        return Pipeline(steps=[('passthrough', 'passthrough')]) # Return a passthrough pipeline
+        return ColumnTransformer(transformers=[('passthrough', 'passthrough', [])])
 
-    # Define preprocessing pipelines for numerical and categorical features
     numeric_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='mean')), # Impute with mean
-        ('outlier_capper', OutlierCapper(lower_bound_quantile=0.01, upper_bound_quantile=0.99)), # Custom outlier capping
-        ('scaler', StandardScaler()) # Scale numerical features
+        ('imputer', SimpleImputer(strategy='mean')),
+        ('outlier_capper', OutlierCapper(lower_bound_quantile=0.01, upper_bound_quantile=0.99)), # This will work on a single Series
+        ('scaler', StandardScaler())
     ])
 
     categorical_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='most_frequent')), # Impute with most frequent
-        ('onehot', OneHotEncoder(handle_unknown='ignore')) # One-hot encode categorical features
-    ])
+        ('imputer', SimpleImputer(strategy='most_frequent')),
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first')) # <--- ENSURE drop='first' or 'if_binary'
+])
 
-    # Create a preprocessor to apply different transformations to different columns
     preprocessor = ColumnTransformer(
         transformers=[
             ('num', numeric_transformer, numeric_features),
             ('cat', categorical_transformer, categorical_features)
         ],
-        remainder='passthrough' # Keep other columns if any, or 'drop'
+        remainder='drop' # Explicitly 'drop' columns not handled
     )
     
-    # Fit the preprocessor to the training data to learn parameters (e.g., means, scales, categories)
-    preprocessor.fit(X_train)
+    preprocessor.fit(X_train) 
     logger.info("Feature preprocessing pipeline created and fitted.")
     return preprocessor
 
@@ -207,38 +200,30 @@ def apply_preprocessing(
     preprocessor: ColumnTransformer,
     X_train: pd.DataFrame,
     X_test: pd.DataFrame
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[pd.DataFrame, pd.DataFrame]: # Explicitly return DataFrames
     """
-    Applies the fitted preprocessing pipeline to both training and test data.
-
-    Parameters:
-        preprocessor (ColumnTransformer): The fitted preprocessing pipeline.
-        X_train (pd.DataFrame): Raw training features.
-        X_test (pd.DataFrame): Raw test features.
-
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: Processed X_train and X_test as NumPy arrays.
+    Applies the fitted preprocessing pipeline to both training and test data,
+    returning them as DataFrames with feature names.
     """
     logger.info("Applying preprocessing to training data...")
-    # .fit_transform() for train data (even if preprocessor is already fitted, it re-fits and transforms)
-    # This assumes create_preprocessor returns a fitted preprocessor, so we should just transform here.
-    X_train_processed_sparse = preprocessor.transform(X_train) # Just transform, not fit_transform
+    X_train_processed_array = preprocessor.transform(X_train) 
 
-    # Convert sparse (if applicable) to dense float64 NumPy array immediately
-    # ColumnTransformer can return sparse matrix if OneHotEncoder is used
-    if hasattr(X_train_processed_sparse, 'toarray'):
-        X_train_processed = X_train_processed_sparse.toarray().astype(np.float64)
-    else:
-        X_train_processed = X_train_processed_sparse.astype(np.float64)
+    if hasattr(X_train_processed_array, 'toarray'):
+        X_train_processed_array = X_train_processed_array.toarray()
+
+    feature_names = preprocessor.get_feature_names_out()
+
+    X_train_processed = pd.DataFrame(X_train_processed_array, columns=feature_names, index=X_train.index) # Keep original index for context
+
 
     logger.info("Applying preprocessing to test data...")
-    X_test_processed_sparse = preprocessor.transform(X_test)
-    if hasattr(X_test_processed_sparse, 'toarray'):
-        X_test_processed = X_test_processed_sparse.toarray().astype(np.float64)
-    else:
-        X_test_processed = X_test_processed_sparse.astype(np.float64)
+    X_test_processed_array = preprocessor.transform(X_test)
+    if hasattr(X_test_processed_array, 'toarray'):
+        X_test_processed_array = X_test_processed_array.toarray()
+    X_test_processed = pd.DataFrame(X_test_processed_array, columns=feature_names, index=X_test.index) # Keep original index for context
 
 
-    logger.info(f"Processed X_train shape: {X_train_processed.shape}, dtype: {X_train_processed.dtype}")
-    logger.info(f"Processed X_test shape: {X_test_processed.shape}, dtype: {X_test_processed.dtype}")
+#   logger.info(f"Processed X_train shape: {X_train_processed.shape}, dtype: {X_train_processed.dtypes}")
+    logger.info(f"Processed X_train shape: {X_train_processed.shape}, dtypes: {X_train_processed.dtypes.to_dict()}") # .to_dict() makes it more readable
+    logger.info(f"Processed X_test shape: {X_test_processed.shape}, dtype: {X_test_processed.dtypes}")
     return X_train_processed, X_test_processed
