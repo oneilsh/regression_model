@@ -161,95 +161,68 @@ def load_model_joblib(path):
         logger.error(f"Failed to load model: {e}")
         raise
 
-def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", registered_model_name="COPD_Prediction_CoxPH", test_size=0.2, random_state=42, **model_kwargs):
-    """
-    Executes the full end-to-end ML pipeline for Cox PH model with MLflow tracking.
-
-    Parameters:
-    config_path (str): Absolute path to the configuration.yaml file.
-    model_artifact_path (str): MLflow artifact path for the model.
-    registered_model_name (str): Name to register the model in MLflow Model Registry.
-    test_size (float): Proportion of the dataset to include in the test split.
-    random_state (int): Seed for random number generator for reproducibility.
-    **model_kwargs: Additional parameters to pass to the CoxPHFitter model.
-
-    Returns:
-    tuple: (trained_cox_model, evaluation_metrics_dict)
-    """
+def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", registered_model_name="COPD_Prediction_CoxPH",
+                            test_size=0.2, random_state=42,
+                            preloaded_data_df=None,
+                            **model_kwargs):
     logger.info("Starting the end-to-end ML pipeline for Cox PH model...")
 
-    # Set MLflow experiment name
     mlflow.set_experiment("COPD_Prediction_CoxPH_Experiment")
 
-    # Start an MLflow run
     with mlflow.start_run(run_name="COPD_Cox_Run") as run:
         run_id = run.info.run_id
         logger.info(f"MLflow Run ID: {run_id}")
 
-        # Log model parameters
         mlflow.log_params(model_kwargs)
         logger.info(f"Logged model parameters: {model_kwargs}")
 
         # --- 1. Load Configuration ---
         logger.info(f"Loading configuration from: {config_path}")
         try:
-            config = dataloader.load_configuration(config_path)
+            config = dataloader_cox.load_configuration(config_path)
             logger.info("Configuration loaded successfully.")
         except Exception as e:
             logger.error(f"Error loading configuration: {e}")
             raise
 
-        # --- 2. Load Data from BigQuery ---
-        logger.info("Loading data from BigQuery...")
-        try:
-            # Assuming dataloader.load_data_from_bigquery handles initial data extraction
-            # and potentially joins across domains as per the YAML configuration and blueprint.
-            # CRITICAL: This data loading step needs to establish 'time_0' for each person,
-            # and ensures no COPD events occurred *before* 'time_0'.
-            # It also needs to derive 'time_to_event' and 'event_observed' for the Cox model.
-            data_df = dataloader.load_data_from_bigquery(config)
-            logger.info(f"Data loaded from BigQuery. Initial shape: {data_df.shape}")
-            logger.info(f"Columns: {data_df.columns.tolist()}")
-        except Exception as e:
-            logger.error(f"Error loading data from Bigquery: {e}")
-            raise
+        # --- 2. Load Data from BigQuery (OR Use Preloaded Data) ---
+        if preloaded_data_df is not None:
+            data_df = preloaded_data_df
+            logger.info(f"Using preloaded data. Shape: {data_df.shape}")
+        else:
+            logger.info("Loading data from BigQuery...")
+            try:
+                data_df = dataloader_cox.load_data_from_bigquery(config)
+                logger.info(f"Data loaded from BigQuery. Initial shape: {data_df.shape}")
+                logger.info(f"Columns: {data_df.columns.tolist()}")
+            except Exception as e:
+                logger.error(f"Error loading data from Bigquery: {e}")
+                raise
 
         # --- Data Preparation for Cox Model (Time, Event, Features) ---
-        # NOTE: This section is CRITICAL and assumes that dataloader has already created
-        # a 'time_to_event' column (duration in years/days from time_0 to event or censoring)
-        # and an 'event_observed' column (1 if event occurred, 0 if censored).
-        # These should be based on your outcome definition (COPD first diagnosis after time_0).
-
-        # Placeholder for actual time and event column names (adjust based on dataloader output)
-        time_col = 'time_to_event_days' # Example: Time in days from time_0 to COPD event or censoring
-        event_col = 'event_observed'   # Example: 1 if COPD occurred, 0 if censored
+        time_col = 'time_to_event_days'
+        event_col = 'event_observed'
 
         if time_col not in data_df.columns or event_col not in data_df.columns:
             logger.error(f"FATAL ERROR: Required '{time_col}' or '{event_col}' columns not found for Cox model. Dataloader must provide these.")
             raise ValueError(f"Missing time-to-event or event columns.")
 
-        # Ensure event_col is boolean for lifelines
         data_df[event_col] = data_df[event_col].astype(bool)
-        data_df[time_col] = data_df[time_col].astype(float).clip(lower=0.1) # Ensure positive duration
+        data_df[time_col] = data_df[time_col].astype(float).clip(lower=0.1)
 
-        # --- Identify Predictor Features ---
-        # Exclude columns used for outcome definition, PII, or internal IDs
-        # IMPORTANT: condition_start_datetimes, condition_end_datetimes, condition_duration
-        # from your YAML features section should NOT be used as predictors if they
-        # refer to the *outcome* COPD condition, as this would be data leakage.
-        # They should be used to derive 'time_to_event' and 'event_observed' instead.
         columns_to_exclude_from_features = [
             'person_id', 'birth_datetime', 'date_of_birth', 'gender_concept_id',
             'race_concept_id', 'ethnicity_concept_id', 'sex_at_birth_concept_id',
             'age_at_consent', 'ehr_consent', 'has_ehr_data',
-            'condition_start_datetimes', 'condition_end_datetimes', # Exclude if these are related to OUTCOME
-            # Add other columns that are not meant to be features
-            time_col, event_col # Exclude the outcome variables themselves
+            'condition_start_datetimes', 'condition_end_datetimes',
+            time_col, event_col, 'copd_status',
+
+            'gender',
+            'race',
+            'smoking_status',
+            'cardiovascular_disease',
         ]
 
-        # Dynamically determine feature columns based on config or dataframe
-        # For this example, we'll assume all other numeric/categorical cols are features.
-        # In a real scenario, you'd list them based on your config's 'features' section.
         feature_columns = [col for col in data_df.columns if col not in columns_to_exclude_from_features]
         logger.info(f"Identified {len(feature_columns)} predictor features.")
         logger.info(f"Feature columns: {feature_columns}")
@@ -258,23 +231,18 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
         # --- 3. Split Data ---
         logger.info("Splitting data into training and testing sets...")
         try:
-            # For Cox models, split the entire DataFrame (features + time + event)
-            # to keep them aligned. Stratify by event status if appropriate.
-            train_df, test_df = preprocessing.split_data(
+            # --- CORRECTED: Unpack ALL 6 return values directly from preprocessing_cox.split_data ---
+            # Your preprocessing_cox.split_data returns: X_train, duration_train, event_train, X_test, duration_test, event_test
+            X_train_raw, duration_train, event_train, X_test_raw, duration_test, event_test = preprocessing_cox.split_data(
                 df=data_df[feature_columns + [time_col, event_col]], # Pass relevant columns for splitting
-                target_column=event_col, # Stratify by event status
+                duration_column=time_col,  # Explicitly pass duration column name as per split_data's signature
+                event_column=event_col,    # Explicitly pass event column name as per split_data's signature
                 test_size=test_size,
                 random_state=random_state,
-                stratify=data_df[event_col] if event_col in data_df.columns else None
+                # Using stratify_by as per your split_data's signature (ensure it's not commented out there if you want stratification)
+                stratify_by=data_df[event_col] if event_col in data_df.columns else None
             )
-            # Separate features, duration, and event for training
-            X_train_raw = train_df[feature_columns]
-            duration_train = train_df[time_col]
-            event_train = train_df[event_col]
-
-            X_test_raw = test_df[feature_columns]
-            duration_test = test_df[time_col]
-            event_test = test_df[event_col]
+            # The manual assignments (e.g., X_train_raw = train_df[feature_columns]) are now removed as they are directly unpacked above.
 
             logger.info(f"Raw data split. X_train_raw shape: {X_train_raw.shape}, X_test_raw shape: {X_test_raw.shape}")
         except Exception as e:
@@ -292,14 +260,11 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
         # --- 4. Feature Preprocessing (Imputation, Scaling, Encoding) ---
         logger.info("Applying feature preprocessing pipeline...")
         try:
-            preprocessor = preprocessing.create_preprocessor(X_train_raw)
-            # Apply preprocessing
-            X_train_processed_array, X_test_processed_array = preprocessing.apply_preprocessing(
+            preprocessor = preprocessing_cox.create_preprocessor(X_train_raw)
+            X_train_processed_array, X_test_processed_array = preprocessing_cox.apply_preprocessing(
                 preprocessor, X_train_raw, X_test_raw
             )
             
-            # Convert processed arrays back to DataFrames with column names for lifelines
-            # This is crucial for lifelines to identify columns
             X_train_processed = pd.DataFrame(X_train_processed_array, columns=preprocessor.get_feature_names_out())
             X_test_processed = pd.DataFrame(X_test_processed_array, columns=preprocessor.get_feature_names_out())
 
@@ -308,13 +273,45 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
             logger.error(f"Error during feature preprocessing: {e}")
             raise
 
+        # --- CRITICAL: Dynamically drop problematic columns POST-preprocessing (for model fit only) ---
+        logger.info("Checking processed features for potential convergence issues before model fit...")
+        final_X_train_processed = X_train_processed.copy()
+        final_X_test_processed = X_test_processed.copy()
+        
+        problematic_cols_to_drop_for_fit = []
+
+        for col in final_X_train_processed.columns:
+            if final_X_train_processed[col].nunique() <= 1:
+                if final_X_train_processed[col].sum() == 0:
+                    logger.warning(f"Processed column '{col}' is all zeros (zero variance). Adding to drop list for model fit.")
+                else:
+                    logger.warning(f"Processed column '{col}' has zero variance (only one unique non-zero value). Adding to drop list for model fit.")
+                problematic_cols_to_drop_for_fit.append(col)
+            elif pd.api.types.is_numeric_dtype(final_X_train_processed[col]):
+                col_variance = final_X_train_processed[col].var() # Corrected from .lower_bound_values
+                if col_variance < 1e-8:
+                    logger.warning(f"Processed numerical column '{col}' has very low variance ({col_variance:.2e}). Adding to drop list for model fit.")
+                    problematic_cols_to_drop_for_fit.append(col)
+
+        problematic_cols_to_drop_for_fit = list(set(problematic_cols_to_drop_for_fit)) # Remove duplicates
+
+        if problematic_cols_to_drop_for_fit:
+            logger.info(f"Temporarily dropping {len(problematic_cols_to_drop_for_fit)} problematic processed columns for Cox model fit: {problematic_cols_to_drop_for_fit}")
+            final_X_train_processed = final_X_train_processed.drop(columns=problematic_cols_to_drop_for_fit)
+            final_X_test_processed = final_X_test_processed.drop(columns=problematic_cols_to_drop_for_fit)
+        else:
+            logger.info("No additional problematic processed columns identified for temporary drop.")
+
+        logger.info(f"Final features for model fit. X_train shape: {final_X_train_processed.shape}, X_test shape: {final_X_test_processed.shape}")
+
+
         # Add duration and event columns back to processed dataframes for lifelines .fit() and .score()
         # This is needed because lifelines expects all relevant columns in one dataframe for fit/score
-        train_df_processed_for_fit = X_train_processed.copy()
+        train_df_processed_for_fit = final_X_train_processed.copy() # Use the final, cleaned feature set
         train_df_processed_for_fit[duration_train.name] = duration_train
         train_df_processed_for_fit[event_train.name] = event_train
 
-        test_df_processed_for_score = X_test_processed.copy()
+        test_df_processed_for_score = final_X_test_processed.copy() # Use the final, cleaned feature set
         test_df_processed_for_score[duration_test.name] = duration_test
         test_df_processed_for_score[event_test.name] = event_test
 
@@ -322,75 +319,90 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
         # --- 5. Train Cox PH Model ---
         logger.info("Training the Cox Proportional Hazards model...")
         try:
-            trained_cox_model = train_cox_model(
-                train_df_processed_for_fit, # Pass combined DataFrame
-                duration_train,
-                event_train,
-                **model_kwargs
-            )
-            logger.info("Cox PH Model training completed successfully.")
-            # Log Cox model summary
-            logger.info("\n--- Cox PH Model Summary ---")
-            logger.info(trained_cox_model.summary.as_text())
-            logger.info("----------------------------")
+            # Check if any features remain after dynamic dropping
+            if train_df_processed_for_fit.empty or len(train_df_processed_for_fit.columns) == 0: # Ensure at least one feature
+                logger.error("No valid features remaining for CoxPHFitter after dynamic column removal. Cannot train model.")
+                trained_cox_model = None
+            else:
+                trained_cox_model = train_cox_model(
+                    train_df_processed_for_fit,
+                    duration_train,
+                    event_train,
+                    **model_kwargs # These are the actual CoxPHFitter parameters
+                )
+                logger.info("Cox PH Model training completed successfully.")
+                # Log Cox model summary
+                logger.info("\n--- Cox PH Model Summary ---")
+                logger.info(trained_cox_model.summary.to_string())
+                logger.info("----------------------------")
 
         except Exception as e:
-            logger.error(f"Error during Cox PH model training: {e}")
+            logger.error(f"Error during Cox PH model training: {e}", exc_info=True)
+            trained_cox_model = None
             raise
 
         # --- 6. Evaluate Cox PH Model ---
-        logger.info("Evaluating the Cox PH model on the test set...")
-        try:
-            evaluation_metrics = evaluate_cox_model(
-                trained_cox_model,
-                X_test_processed, # Pass only features for prediction
-                duration_test,
-                event_test
-            )
-            logger.info("Cox PH Model evaluation completed.")
+        evaluation_metrics = {}
+        if trained_cox_model is not None:
+            logger.info("Evaluating the Cox PH model on the test set...")
+            try:
+                evaluation_metrics = evaluate_cox_model(
+                    trained_cox_model,
+                    final_X_test_processed,
+                    duration_test,
+                    event_test
+                )
+                logger.info("Cox PH Model evaluation completed.")
 
-            logger.info("\n--- Cox PH Model Evaluation Metrics ---")
-            for k, v in evaluation_metrics.items():
-                logger.info(f"{k}: {v:.4f}" if v is not None else f"{k}: N/A")
-            logger.info("------------------------------")
-            mlflow.log_metrics(evaluation_metrics) # Log evaluation metrics to MLflow
+                logger.info("\n--- Cox PH Model Evaluation Metrics ---")
+                for k, v in evaluation_metrics.items():
+                    logger.info(f"{k}: {v:.4f}" if v is not None else f"{k}: N/A")
+                logger.info("------------------------------")
+                mlflow.log_metrics(evaluation_metrics) # Log evaluation metrics to MLflow
 
-        except Exception as e:
-            logger.error(f"Error during model evaluation: {e}")
-            raise
+            except Exception as e:
+                logger.error(f"Error during model evaluation: {e}", exc_info=True)
+                # Do not re-raise, allow logging model even if evaluation fails
+        else:
+            logger.warning("Model training failed, skipping evaluation.")
+
 
         # --- 7. Log Model with MLflow ---
-        logger.info(f"Logging the trained Cox PH model to MLflow artifact path: {model_artifact_path}")
-        try:
-            # Define conda environment for MLflow model (must include lifelines)
-            conda_env = {
-                "channels": ["defaults", "conda-forge"],
-                "dependencies": [
-                    f"python={os.environ.get('PYTHON_VERSION', '3.9')}", # Use environment variable or default
-                    "pip",
-                    {"pip": ["mlflow", "lifelines", "pandas", "numpy", "scikit-learn"]} # Ensure all deps are here
-                ]
-            }
+        if trained_cox_model is not None:
+            logger.info(f"Logging the trained Cox PH model to MLflow artifact path: {model_artifact_path}")
+            try:
+                # Define conda environment for MLflow model (must include lifelines)
+                conda_env = {
+                    "channels": ["defaults", "conda-forge"],
+                    "dependencies": [
+                        f"python={os.environ.get('PYTHON_VERSION', '3.9')}",
+                        "pip",
+                        {"pip": ["mlflow", "lifelines", "pandas", "numpy", "scikit-learn"]}
+                    ]
+                }
 
-            mlflow.pyfunc.log_model(
-                artifact_path=model_artifact_path,
-                python_model=LifelinesCoxPHWrapper(),
-                artifacts={
-                    "model": trained_cox_model,
-                    "duration_col": duration_train.name,
-                    "event_col": event_train.name,
-                    "feature_names": X_train_processed.columns.tolist() # Store feature names for prediction
-                },
-                conda_env=conda_env,
-                registered_model_name=registered_model_name
-            )
-            logger.info(f"Cox PH model logged to MLflow successfully under run ID: {run_id}")
+                mlflow.pyfunc.log_model(
+                    artifact_path=model_artifact_path,
+                    python_model=LifelinesCoxPHWrapper(),
+                    artifacts={
+                        "model": trained_cox_model,
+                        "duration_col": duration_train.name,
+                        "event_col": event_train.name,
+                        # Store feature names that were *actually* used for training
+                        "feature_names": final_X_train_processed.columns.tolist()
+                    },
+                    conda_env=conda_env,
+                    registered_model_name=registered_model_name
+                )
+                logger.info(f"Cox PH model logged to MLflow successfully under run ID: {run_id}")
 
-        except Exception as e:
-            logger.error(f"Error logging model to MLflow: {e}")
-            raise
+            except Exception as e:
+                logger.error(f"Error logging model to MLflow: {e}", exc_info=True)
+                # Do not re-raise, allow overall pipeline to complete with partial success
+        else:
+            logger.warning("Model training failed, skipping MLflow model logging.")
 
-    logger.info("ML pipeline completed successfully!")
+    logger.info("ML pipeline completed successfully (with potential warnings/errors).")
     return trained_cox_model, evaluation_metrics
 
 
