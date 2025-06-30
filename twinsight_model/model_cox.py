@@ -32,6 +32,8 @@ class LifelinesCoxPHWrapper(mlflow.pyfunc.PythonModel):
 
     def load_context(self, context):
         self.model = joblib.load(context.artifacts["model"])
+        # Load the preprocessor object
+        self.preprocessor = joblib.load(context.artifacts["preprocessor"])
         self.duration_col = self._duration_col
         self.event_col = self._event_col
         self.feature_names = self._feature_names
