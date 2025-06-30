@@ -28,7 +28,8 @@ class LifelinesCoxPHWrapper(mlflow.pyfunc.PythonModel):
         """
         Loads the CoxPHFitter model and its associated metadata from the context.
         """
-        self.model = context.artifacts["model"]
+        # Load the model from the file path provided in artifacts
+        self.model = joblib.load(context.artifacts["model"])
         self.duration_col = context.artifacts["duration_col"]
         self.event_col = context.artifacts["event_col"]
         self.feature_names = context.artifacts["feature_names"]
@@ -392,23 +393,37 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
                 conda_env = {
                     "channels": ["defaults", "conda-forge"],
                     "dependencies": [
-                        f"python={os.environ.get('PYTHON_VERSION', '3.9')}",
+                        f"python={os.environ.get('PYTHON_VERSION', '3.9')}", # Or '3.10' if that's what your env uses
                         "pip",
                         {"pip": ["mlflow", "lifelines", "pandas", "numpy", "scikit-learn"]}
                     ]
                 }
 
+                # --- NEW: Save the model to a temporary path first ---
+                # Create a temporary directory for artifacts if not running in a proper MLflow artifact store
+                temp_model_dir = "temp_mlflow_model_artifact"
+                os.makedirs(temp_model_dir, exist_ok=True)
+                temp_model_path = os.path.join(temp_model_dir, "cox_model.joblib")
+                joblib.dump(trained_cox_model, temp_model_path) # Use joblib to save your lifelines model
+
                 mlflow.pyfunc.log_model(
                     artifact_path=model_artifact_path,
                     python_model=LifelinesCoxPHWrapper(),
                     artifacts={
-                        "model": trained_cox_model,
+                        # Pass the *path* to the saved model, not the model object itself
+                        "model": temp_model_path,
                         "duration_col": duration_train.name,
                         "event_col": event_train.name,
-                        # Store feature names that were *actually* used for training
                         "feature_names": final_X_train_processed.columns.tolist()
                     },
                     conda_env=conda_env,
+                    # IMPORTANT: Use 'name' instead of 'artifact_path' for the main model artifact for consistency
+                    # The warning "artifact_path is deprecated. Please use name instead." hints at this.
+                    # mlflow.pyfunc.log_model doesn't have a 'name' argument, so 'artifact_path' is still used here
+                    # for the *artifact_path within the MLflow run*. The deprecation warning is usually about
+                    # `mlflow.register_model(artifact_path=...)` vs `mlflow.register_model(name=...)`
+                    # For `mlflow.pyfunc.log_model`, `artifact_path` is correct for where the model is stored
+                    # within the run artifacts.
                     registered_model_name=registered_model_name
                 )
                 logger.info(f"Cox PH model logged to MLflow successfully under run ID: {run_id}")
@@ -416,6 +431,11 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
             except Exception as e:
                 logger.error(f"Error logging model to MLflow: {e}", exc_info=True)
                 # Do not re-raise, allow overall pipeline to complete with partial success
+            finally:
+                # Clean up the temporary directory
+                if os.path.exists(temp_model_dir):
+                    import shutil
+                    shutil.rmtree(temp_model_dir) # Remove the directory and its contents
         else:
             logger.warning("Model training failed, skipping MLflow model logging.")
 
