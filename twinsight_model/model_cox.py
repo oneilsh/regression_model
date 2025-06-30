@@ -4,6 +4,7 @@ import joblib # Keep for general saving/loading, but MLflow will manage models
 import pandas as pd
 import numpy as np
 import os # For creating directories for saving
+import inspect
 
 # --- MLflow Imports ---
 import mlflow
@@ -250,19 +251,14 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
         # --- 3. Split Data ---
         logger.info("Splitting data into training and testing sets...")
         try:
-            # --- CORRECTED: Unpack ALL 6 return values directly from preprocessing_cox.split_data ---
-            # Your preprocessing_cox.split_data returns: X_train, duration_train, event_train, X_test, duration_test, event_test
             X_train_raw, duration_train, event_train, X_test_raw, duration_test, event_test = preprocessing_cox.split_data(
-                df=data_df[feature_columns + [time_col, event_col]], # Pass relevant columns for splitting
-                duration_column=time_col,  # Explicitly pass duration column name as per split_data's signature
-                event_column=event_col,    # Explicitly pass event column name as per split_data's signature
+                df=data_df[feature_columns + [time_col, event_col]],
+                duration_column=time_col,
+                event_column=event_col,
                 test_size=test_size,
                 random_state=random_state,
-                # Using stratify_by as per your split_data's signature (ensure it's not commented out there if you want stratification)
                 stratify_by=data_df[event_col] if event_col in data_df.columns else None
             )
-            # The manual assignments (e.g., X_train_raw = train_df[feature_columns]) are now removed as they are directly unpacked above.
-
             logger.info(f"Raw data split. X_train_raw shape: {X_train_raw.shape}, X_test_raw shape: {X_test_raw.shape}")
         except Exception as e:
             logger.error(f"Error during data splitting: {e}")
@@ -279,6 +275,7 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
         # --- 4. Feature Preprocessing (Imputation, Scaling, Encoding) ---
         logger.info("Applying feature preprocessing pipeline...")
         try:
+            # preprocessor here is the *fitted* preprocessor
             preprocessor = preprocessing_cox.create_preprocessor(X_train_raw)
             X_train_processed_array, X_test_processed_array = preprocessing_cox.apply_preprocessing(
                 preprocessor, X_train_raw, X_test_raw
@@ -325,12 +322,11 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
 
 
         # Add duration and event columns back to processed dataframes for lifelines .fit() and .score()
-        # This is needed because lifelines expects all relevant columns in one dataframe for fit/score
-        train_df_processed_for_fit = final_X_train_processed.copy() # Use the final, cleaned feature set
+        train_df_processed_for_fit = final_X_train_processed.copy()
         train_df_processed_for_fit[duration_train.name] = duration_train
         train_df_processed_for_fit[event_train.name] = event_train
 
-        test_df_processed_for_score = final_X_test_processed.copy() # Use the final, cleaned feature set
+        test_df_processed_for_score = final_X_test_processed.copy()
         test_df_processed_for_score[duration_test.name] = duration_test
         test_df_processed_for_score[event_test.name] = event_test
 
@@ -338,8 +334,7 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
         # --- 5. Train Cox PH Model ---
         logger.info("Training the Cox Proportional Hazards model...")
         try:
-            # Check if any features remain after dynamic dropping
-            if train_df_processed_for_fit.empty or len(train_df_processed_for_fit.columns) == 0: # Ensure at least one feature
+            if train_df_processed_for_fit.empty or len(train_df_processed_for_fit.columns) == 0:
                 logger.error("No valid features remaining for CoxPHFitter after dynamic column removal. Cannot train model.")
                 trained_cox_model = None
             else:
@@ -347,10 +342,9 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
                     train_df_processed_for_fit,
                     duration_train,
                     event_train,
-                    **model_kwargs # These are the actual CoxPHFitter parameters
+                    **model_kwargs
                 )
                 logger.info("Cox PH Model training completed successfully.")
-                # Log Cox model summary
                 logger.info("\n--- Cox PH Model Summary ---")
                 logger.info(trained_cox_model.summary.to_string())
                 logger.info("----------------------------")
@@ -367,7 +361,7 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
             try:
                 evaluation_metrics = evaluate_cox_model(
                     trained_cox_model,
-                    final_X_test_processed,
+                    final_X_test_processed, # Pass features only
                     duration_test,
                     event_test
                 )
@@ -377,11 +371,10 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
                 for k, v in evaluation_metrics.items():
                     logger.info(f"{k}: {v:.4f}" if v is not None else f"{k}: N/A")
                 logger.info("------------------------------")
-                mlflow.log_metrics(evaluation_metrics) # Log evaluation metrics to MLflow
+                mlflow.log_metrics(evaluation_metrics)
 
             except Exception as e:
                 logger.error(f"Error during model evaluation: {e}", exc_info=True)
-                # Do not re-raise, allow logging model even if evaluation fails
         else:
             logger.warning("Model training failed, skipping evaluation.")
 
@@ -389,47 +382,54 @@ def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", regist
         # --- 7. Log Model with MLflow ---
         if trained_cox_model is not None:
             logger.info(f"Logging the trained Cox PH model to MLflow artifact path: {model_artifact_path}")
+            
+            # Get the final list of feature names used by the model
+            # This is critical for the wrapper and prediction
+            final_model_feature_names = final_X_train_processed.columns.tolist()
+
             try:
                 # Define conda environment for MLflow model (must include lifelines)
                 conda_env = {
                     "channels": ["defaults", "conda-forge"],
                     "dependencies": [
-                        f"python={os.environ.get('PYTHON_VERSION', '3.9')}", # Or '3.10' if that's what your env uses
+                        f"python={os.environ.get('PYTHON_VERSION', '3.9')}",
                         "pip",
-                        {"pip": ["mlflow", "lifelines", "pandas", "numpy", "scikit-learn"]}
+                        {"pip": ["mlflow", "lifelines", "pandas", "numpy", "scikit-learn", "joblib"]} # Added joblib
                     ]
                 }
 
-                # --- NEW: Save the model to a temporary path first ---
-                # Create a temporary directory for artifacts if not running in a proper MLflow artifact store
-                temp_model_dir = "temp_mlflow_model_artifact"
-                os.makedirs(temp_model_dir, exist_ok=True)
-                temp_model_path = os.path.join(temp_model_dir, "cox_model.joblib")
-                joblib.dump(trained_cox_model, temp_model_path)
-    
+                # --- NEW: Save both the model and the preprocessor to temporary paths ---
+                temp_artifacts_dir = "temp_mlflow_artifacts"
+                os.makedirs(temp_artifacts_dir, exist_ok=True)
+                
+                temp_model_file = os.path.join(temp_artifacts_dir, "cox_model_object.joblib")
+                temp_preprocessor_file = os.path.join(temp_artifacts_dir, "fitted_preprocessor_object.joblib")
+                
+                joblib.dump(trained_cox_model, temp_model_file)
+                joblib.dump(preprocessor, temp_preprocessor_file) # Save the fitted preprocessor here
+
                 mlflow.pyfunc.log_model(
-                    artifact_path=model_artifact_path,
+                    artifact_path=model_artifact_path, # This is the main directory 'cox_model'
                     python_model=LifelinesCoxPHWrapper(
-                        duration_col=duration_train.name, # Passed to constructor
-                        event_col=event_train.name,       # Passed to constructor
-                        feature_names=final_X_train_processed.columns.tolist() # Passed to constructor
+                        duration_col=duration_train.name,
+                        event_col=event_train.name,
+                        feature_names=final_model_feature_names # Use the features actually fed to the model
                     ),
                     artifacts={
-                        "model": temp_model_path, # Only the file path here
+                        "model": temp_model_file, # Path to the joblib-saved model object
+                        "preprocessor": temp_preprocessor_file # Path to the joblib-saved preprocessor object
                     },
                     conda_env=conda_env,
                     registered_model_name=registered_model_name
                 )
-                logger.info(f"Cox PH model logged to MLflow successfully under run ID: {run_id}")
+                logger.info(f"Cox PH model and preprocessor logged to MLflow successfully under run ID: {run_id}")
 
             except Exception as e:
-                logger.error(f"Error logging model to MLflow: {e}", exc_info=True)
-                # Do not re-raise, allow overall pipeline to complete with partial success
+                logger.error(f"Error logging model/preprocessor to MLflow: {e}", exc_info=True)
             finally:
                 # Clean up the temporary directory
-                if os.path.exists(temp_model_dir):
-                    import shutil
-                    shutil.rmtree(temp_model_dir) # Remove the directory and its contents
+                if os.path.exists(temp_artifacts_dir):
+                    shutil.rmtree(temp_artifacts_dir)
         else:
             logger.warning("Model training failed, skipping MLflow model logging.")
 
