@@ -128,6 +128,22 @@ def evaluate_cox_model(model, X_test, duration_test, event_test):
         logger.error(f"Error during model evaluation: {e}")
         raise
     return metrics
+#     try:
+#     # Predict partial hazards for the test set
+#     predicted_hazards = model.predict_partial_hazard(X_test).values
+
+#     # Calculate C-index
+#     c_index = concordance_index(
+#         event_test,      # observed event status
+#         predicted_hazards, # predicted risk scores (higher is worse prognosis)
+#         duration_test    # observed durations
+#     )
+#     metrics = {"c_index": c_index}
+#     logger.info("Model evaluation completed.")
+# except Exception as e:
+#     logger.error(f"Error during model evaluation: {e}")
+#     raise
+# return metrics
 
 def save_model_joblib(model, path):
     """
