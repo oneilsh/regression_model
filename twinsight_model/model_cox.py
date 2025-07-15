@@ -5,6 +5,8 @@ import pandas as pd
 import numpy as np
 import os # For creating directories for saving
 import inspect
+import pickle
+from datetime import datetime
 
 # --- MLflow Imports ---
 import mlflow
@@ -12,18 +14,78 @@ import mlflow.pyfunc
 # --- Lifelines Imports for Cox PH ---
 from lifelines import CoxPHFitter
 from lifelines.utils import concordance_index # For explicit C-index calculation
-
+import joblib
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__) # Use logger instead of direct logging.info
 
 # Assume dataloader and preprocessing are adjusted to provide necessary columns
-from twinsight_model import dataloader
-from twinsight_model import preprocessing
+from twinsight_model import dataloader_cox
+from twinsight_model import preprocessing_cox
+
+# Import specific functions/classes directly from sibling modules
+from .dataloader_cox import load_configuration, load_data_from_bigquery 
+from .preprocessing_cox import split_data, create_preprocessor, apply_preprocessing 
+from .utils import check_for_data 
+
+# --- Logging Setup ---
+# Configure logging only once for the module
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
-# --- MLflow Model Wrapper for CoxPHFitter ---
-# This class wraps the lifelines model to make it compatible with mlflow.pyfunc.log_model
+# --- Helper Function for Model Evaluation ---
+# This is the single, corrected version of evaluate_cox_model.
+def evaluate_cox_model(model, X_test, y_test_duration, y_test_event, duration_col, event_col):
+    """
+    Evaluates the Cox PH model on the test set.
+
+    Args:
+        model: The trained CoxPHFitter model.
+        X_test (pd.DataFrame): Test features.
+        y_test_duration (pd.Series): Test durations.
+        y_test_event (pd.Series): Test event indicators.
+        duration_col (str): Name of the duration column in the original DataFrame.
+        event_col (str): Name of the event column in the original DataFrame.
+
+    Returns:
+        dict: A dictionary of evaluation metrics.
+    """
+    logger.info(f"Type of model in evaluate_cox_model: {type(model)}")
+    evaluation_metrics = {}
+    try:
+        # Create a combined DataFrame for scoring as expected by model.score()
+        test_df_for_score = X_test.copy()
+        test_df_for_score[duration_col] = y_test_duration
+        test_df_for_score[event_col] = y_test_event
+
+        if hasattr(model, 'score'):
+            logger.info(f"Model has score method. Signature: {inspect.signature(model.score)}")
+            # Use model.score with the combined DataFrame. It typically returns average partial log-likelihood.
+            log_likelihood_score = model.score(test_df_for_score)
+            
+            # For explicit Concordance Index calculation, use lifelines.utils.concordance_index
+            predictions_for_cindex = model.predict_partial_hazard(X_test)
+            c_index_explicit = concordance_index(y_test_duration, predictions_for_cindex, y_test_event)
+
+            evaluation_metrics['log_likelihood_score'] = log_likelihood_score
+            evaluation_metrics['c_index'] = c_index_explicit
+            logger.info(f"Log-likelihood Score: {log_likelihood_score}")
+            logger.info(f"Concordance Index (C-index): {c_index_explicit}")
+
+        else:
+            logger.info("Model does NOT have a score method!")
+            evaluation_metrics['c_index'] = np.nan # Indicate not calculated if score method is missing
+
+    except Exception as e:
+        logger.error(f"Error during model evaluation: {e}", exc_info=True)
+        # evaluation_metrics will remain empty or partial if error occurs
+    return evaluation_metrics
+
+
+# --- MLflow Model Wrapper for CoxPHFitter (Retained for structure, but not used for pickling anymore) ---
+# This class was previously used for mlflow.pyfunc.log_model, but we are now using direct pickling.
+# It is kept here as it defines the structure of a custom pyfunc model wrapper.
 class LifelinesCoxPHWrapper(mlflow.pyfunc.PythonModel):
     def __init__(self, duration_col, event_col, feature_names):
         self._duration_col = duration_col
@@ -32,7 +94,6 @@ class LifelinesCoxPHWrapper(mlflow.pyfunc.PythonModel):
 
     def load_context(self, context):
         self.model = joblib.load(context.artifacts["model"])
-        # Load the preprocessor object
         self.preprocessor = joblib.load(context.artifacts["preprocessor"])
         self.duration_col = self._duration_col
         self.event_col = self._event_col
@@ -40,123 +101,28 @@ class LifelinesCoxPHWrapper(mlflow.pyfunc.PythonModel):
         logger.info("LifelinesCoxPHWrapper loaded successfully.")
 
     def predict(self, context, model_input):
-        """
-        Predicts survival probabilities (or other metrics) using the loaded model.
-        This method will return the probability of the event occurring by specific times.
-        By default, it will return the predicted partial hazard, which is the linear
-        predictor component of the Cox model.
-        """
         if not isinstance(model_input, pd.DataFrame):
-            model_input = pd.DataFrame(model_input, columns=self.feature_names)
+            raise TypeError("Input to predict must be a pandas DataFrame.")
         
-        # Ensure columns match training features
-        # Note: In a real scenario, you'd apply the same preprocessing steps here
-        # that were used during training (e.g., scaling, one-hot encoding).
-        # For simplicity, this example assumes model_input is already processed.
-        
-        # To get absolute probabilities:
-        # Define time points for prediction (e.g., 1 year, 3 years, 5 years)
-        # These are in the same units as your 'time_to_event' (e.g., days, years)
-        # For demonstration, let's return probabilities at 1, 3, and 5 years (if time_to_event is in years)
-        
-        # This wrapper can be extended to accept a 'time_points' argument for prediction
-        # For now, we'll return the predicted partial hazard as it's a direct output from Cox,
-        # or predicted survival if specific time points are desired for probability.
-        
-        # If you want probabilities by specific times (e.g., 1, 3, 5 years from time_0)
-        # you would add a parameter to the predict method or fix the times:
-        # Example to get 1, 3, 5 year survival probabilities
-        # pred_times = np.array([1, 3, 5])
-        # survival_functions = self.model.predict_survival_function(model_input)
-        # survival_probs_at_times = survival_functions.loc[pred_times].T
-        # event_probs_at_times = 1 - survival_probs_at_times
-        # event_probs_at_times.columns = [f"prob_event_by_{t}_year" for t in pred_times]
-        # return event_probs_at_times
+        if self.feature_names:
+            model_input = model_input.reindex(columns=self.feature_names, fill_value=0.0)
 
-        # For basic output consistent with what SHAP would operate on: return partial hazard
         return self.model.predict_partial_hazard(model_input)
 
+    def predict_survival_function_wrapper(self, model_input, times):
+        if not isinstance(model_input, pd.DataFrame):
+            raise TypeError("Input to predict_survival_function_wrapper must be a pandas DataFrame.")
+
+        if self.feature_names:
+            model_input = model_input.reindex(columns=self.feature_names, fill_value=0.0)
+            
+        return self.model.predict_survival_function(model_input, times=times)
 
 
-# --- Training and Evaluation Functions for Cox PH ---
-def train_cox_model(X_train, duration_train, event_train, **kwargs):
-    """
-    Train a Cox Proportional Hazards model with configurable parameters.
-
-    Parameters:
-    X_train (pd.DataFrame): Training data features.
-    duration_train (pd.Series): Time to event or censoring for training data.
-    event_train (pd.Series): Event observed (1) or censored (0) for training data.
-    **kwargs: Additional parameters for CoxPHFitter (e.g., penalizer_alpha, l1_ratio).
-
-    Returns:
-    CoxPHFitter: Trained Cox Proportional Hazards model.
-    """
-    logger.info("Initializing CoxPHFitter model...")
-    # CoxPHFitter takes regularization parameters directly
-    model = CoxPHFitter(**kwargs)
-    try:
-        # Pass duration and event columns directly or as series
-        model.fit(X_train, duration_col=duration_train.name, event_col=event_train.name)
-        logger.info("Model training completed.")
-    except Exception as e:
-        logger.error(f"Error during model training: {e}")
-        raise
-    return model
-
-def evaluate_cox_model(model, X_test, duration_test, event_test):
-    """
-    Evaluate the Cox model using the Concordance Index (C-index).
-
-    Parameters:
-        model: Trained CoxPHFitter model.
-        X_test (pd.DataFrame): Test data features.
-        duration_test (pd.Series): Time to event or censoring for test data.
-        event_test (pd.Series): Event observed (1) or censored (0) for test data.
-
-    Returns:
-        dict: Dictionary containing the C-index score.
-    """
-    try:
-        # Ensure X_test contains duration and event cols for model.score()
-        # Create a combined DataFrame for scoring if not already done
-        test_df_for_score = X_test.copy()
-        test_df_for_score[duration_test.name] = duration_test
-        test_df_for_score[event_test.name] = event_test
-
-        c_index = model.score(test_df_for_score,
-                              duration_col=duration_test.name,
-                              event_col=event_test.name)
-        metrics = {"c_index": c_index}
-        logger.info("Model evaluation completed.")
-    except Exception as e:
-        logger.error(f"Error during model evaluation: {e}")
-        raise
-    return metrics
-#     try:
-#     # Predict partial hazards for the test set
-#     predicted_hazards = model.predict_partial_hazard(X_test).values
-
-#     # Calculate C-index
-#     c_index = concordance_index(
-#         event_test,      # observed event status
-#         predicted_hazards, # predicted risk scores (higher is worse prognosis)
-#         duration_test    # observed durations
-#     )
-#     metrics = {"c_index": c_index}
-#     logger.info("Model evaluation completed.")
-# except Exception as e:
-#     logger.error(f"Error during model evaluation: {e}")
-#     raise
-# return metrics
-
+# --- Helper functions for joblib saving/loading (not used by run_end_to_end_pipeline directly now) ---
 def save_model_joblib(model, path):
     """
-    Save the trained model to a file using joblib (for non-MLflow context if needed).
-
-    Parameters:
-        model: Trained model object.
-        path (str): File path to save the model.
+    Save the trained model to a file using joblib.
     """
     try:
         joblib.dump(model, path)
@@ -167,13 +133,7 @@ def save_model_joblib(model, path):
 
 def load_model_joblib(path):
     """
-    Load a model from a file using joblib (for non-MLflow context if needed).
-
-    Parameters:
-        path (str): File path to load the model from.
-
-    Returns:
-        The loaded model object.
+    Load a model from a file using joblib.
     """
     try:
         model = joblib.load(path)
@@ -183,420 +143,283 @@ def load_model_joblib(path):
         logger.error(f"Failed to load model: {e}")
         raise
 
-def run_end_to_end_pipeline(config_path, model_artifact_path="cox_model", registered_model_name="COPD_Prediction_CoxPH",
-                            test_size=0.2, random_state=42,
-                            preloaded_data_df=None,
-                            **model_kwargs):
+
+# --- Main End-to-End Pipeline Function ---
+def run_end_to_end_pipeline(config_path, preloaded_data_df=None, test_size=0.2, random_state=42, **model_kwargs):
+    """
+    Runs the end-to-end ML pipeline for the Cox Proportional Hazards model.
+
+    Args:
+        config_path (str): Path to the configuration YAML file.
+        preloaded_data_df (pd.DataFrame, optional): Preloaded data DataFrame. If None, data is loaded from BigQuery.
+        test_size (float, optional): Proportion of the dataset to include in the test split. Defaults to 0.2.
+        random_state (int, optional): Random seed for reproducibility. Defaults to 42.
+        **model_kwargs: Keyword arguments for CoxPHFitter initialization (e.g., penalizer, l1_ratio).
+
+    Returns:
+        tuple: A tuple containing the trained CoxPHFitter model object and evaluation metrics.
+    """
     logger.info("Starting the end-to-end ML pipeline for Cox PH model...")
 
-    mlflow.set_experiment("COPD_Prediction_CoxPH_Experiment")
-
-    with mlflow.start_run(run_name="COPD_Cox_Run") as run:
-        run_id = run.info.run_id
-        logger.info(f"MLflow Run ID: {run_id}")
+    # MLflow run for tracking parameters and metrics (not for model artifact logging via pyfunc)
+    with mlflow.start_run() as run:
+        mlflow_run_id = run.info.run_id
+        logger.info(f"MLflow Run ID: {mlflow_run_id}")
 
         mlflow.log_params(model_kwargs)
         logger.info(f"Logged model parameters: {model_kwargs}")
 
-        # --- 1. Load Configuration ---
-        logger.info(f"Loading configuration from: {config_path}")
-        try:
-            config = dataloader_cox.load_configuration(config_path)
-            logger.info("Configuration loaded successfully.")
-        except Exception as e:
-            logger.error(f"Error loading configuration: {e}")
-            raise
+        config = dataloader_cox.load_configuration(config_path)
+        logger.info("Configuration loaded successfully.")
 
-        # --- 2. Load Data from BigQuery (OR Use Preloaded Data) ---
-        if preloaded_data_df is not None:
-            data_df = preloaded_data_df
-            logger.info(f"Using preloaded data. Shape: {data_df.shape}")
-        else:
-            logger.info("Loading data from BigQuery...")
-            try:
-                data_df = dataloader_cox.load_data_from_bigquery(config)
-                logger.info(f"Data loaded from BigQuery. Initial shape: {data_df.shape}")
-                logger.info(f"Columns: {data_df.columns.tolist()}")
-            except Exception as e:
-                logger.error(f"Error loading data from Bigquery: {e}")
-                raise
+        data_df = preloaded_data_df if preloaded_data_df is not None else dataloader_cox.load_data_from_bigquery(config)
+        logger.info(f"Using preloaded data. Shape: {data_df.shape}")
 
-        # --- Data Preparation for Cox Model (Time, Event, Features) ---
-        time_col = 'time_to_event_days'
-        event_col = 'event_observed'
-
-        if time_col not in data_df.columns or event_col not in data_df.columns:
-            logger.error(f"FATAL ERROR: Required '{time_col}' or '{event_col}' columns not found for Cox model. Dataloader must provide these.")
-            raise ValueError(f"Missing time-to-event or event columns.")
-
-        data_df[event_col] = data_df[event_col].astype(bool)
-        data_df[time_col] = data_df[time_col].astype(float).clip(lower=0.1)
-
-        columns_to_exclude_from_features = [
-            'person_id', 'birth_datetime', 'date_of_birth', 'gender_concept_id',
-            'race_concept_id', 'ethnicity_concept_id', 'sex_at_birth_concept_id',
-            'age_at_consent', 'ehr_consent', 'has_ehr_data',
-            'condition_start_datetimes', 'condition_end_datetimes',
-            time_col, event_col, 'copd_status',
-
-            'gender',
-            'race',
-            'smoking_status',
-            'cardiovascular_disease',
-        ]
-
-        feature_columns = [col for col in data_df.columns if col not in columns_to_exclude_from_features]
+        # Identify features and target columns from config
+        feature_columns = config["model_features_final"]
+        duration_col = config["model_io_columns"]["duration_col"]
+        event_col = config["model_io_columns"]["event_col"]
+        
         logger.info(f"Identified {len(feature_columns)} predictor features.")
         logger.info(f"Feature columns: {feature_columns}")
 
+        # Prepare X, y, event, duration for splitting
+        X = data_df[feature_columns].copy()
+        y_duration = data_df[duration_col]
+        y_event = data_df[event_col]
 
-        # --- 3. Split Data ---
         logger.info("Splitting data into training and testing sets...")
-        try:
-            X_train_raw, duration_train, event_train, X_test_raw, duration_test, event_test = preprocessing_cox.split_data(
-                df=data_df[feature_columns + [time_col, event_col]],
-                duration_column=time_col,
-                event_column=event_col,
-                test_size=test_size,
-                random_state=random_state,
-                stratify_by=data_df[event_col] if event_col in data_df.columns else None
-            )
-            logger.info(f"Raw data split. X_train_raw shape: {X_train_raw.shape}, X_test_raw shape: {X_test_raw.shape}")
-        except Exception as e:
-            logger.error(f"Error during data splitting: {e}")
-            raise
+        X_train_raw, X_test_raw, y_train_duration, y_test_duration, y_train_event, y_test_event = \
+            dataloader_cox.split_time_to_event_data(X, y_duration, y_event, test_size, random_state)
+        
+        logger.info(f"Data split complete: {len(X_train_raw)} train samples, {len(X_test_raw)} test samples.")
+        logger.info(f"Raw data split. X_train_raw shape: {X_train_raw.shape}, X_test_raw shape: {X_test_raw.shape}")
 
-        # --- Explicit Type Conversion for Numerical Features ---
-        logger.info("Converting relevant columns to float64 before preprocessing...")
+        # Convert relevant columns to float64 for preprocessing consistency
         for col in X_train_raw.select_dtypes(include=['Int64', 'boolean']).columns:
             X_train_raw[col] = X_train_raw[col].astype(float)
         for col in X_test_raw.select_dtypes(include=['Int64', 'boolean']).columns:
             X_test_raw[col] = X_test_raw[col].astype(float)
 
 
-        # --- 4. Feature Preprocessing (Imputation, Scaling, Encoding) ---
         logger.info("Applying feature preprocessing pipeline...")
-        try:
-            # preprocessor here is the *fitted* preprocessor
-            preprocessor = preprocessing_cox.create_preprocessor(X_train_raw)
-            X_train_processed_array, X_test_processed_array = preprocessing_cox.apply_preprocessing(
-                preprocessor, X_train_raw, X_test_raw
-            )
-            
-            X_train_processed = pd.DataFrame(X_train_processed_array, columns=preprocessor.get_feature_names_out())
-            X_test_processed = pd.DataFrame(X_test_processed_array, columns=preprocessor.get_feature_names_out())
-
-            logger.info(f"Features processed. X_train_processed shape: {X_train_processed.shape}, X_test_processed shape: {X_test_processed.shape}")
-        except Exception as e:
-            logger.error(f"Error during feature preprocessing: {e}")
-            raise
-
-        # --- CRITICAL: Dynamically drop problematic columns POST-preprocessing (for model fit only) ---
-        logger.info("Checking processed features for potential convergence issues before model fit...")
-        final_X_train_processed = X_train_processed.copy()
-        final_X_test_processed = X_test_processed.copy()
+        # Create and fit preprocessor on training data
+        fitted_preprocessor = preprocessing_cox.create_preprocessor(X_train_raw)
         
-        problematic_cols_to_drop_for_fit = []
+        logger.info("Feature preprocessing pipeline created and fitted.")
 
-        for col in final_X_train_processed.columns:
-            if final_X_train_processed[col].nunique() <= 1:
-                if final_X_train_processed[col].sum() == 0:
-                    logger.warning(f"Processed column '{col}' is all zeros (zero variance). Adding to drop list for model fit.")
-                else:
-                    logger.warning(f"Processed column '{col}' has zero variance (only one unique non-zero value). Adding to drop list for model fit.")
-                problematic_cols_to_drop_for_fit.append(col)
-            elif pd.api.types.is_numeric_dtype(final_X_train_processed[col]):
-                col_variance = final_X_train_processed[col].var() # Corrected from .lower_bound_values
-                if col_variance < 1e-8:
-                    logger.warning(f"Processed numerical column '{col}' has very low variance ({col_variance:.2e}). Adding to drop list for model fit.")
-                    problematic_cols_to_drop_for_fit.append(col)
+        # Apply preprocessing
+        X_train_processed_array, X_test_processed_array = preprocessing_cox.apply_preprocessing(
+            fitted_preprocessor, X_train_raw, X_test_raw
+        )
+        
+        # Get processed feature names
+        feature_columns_processed = fitted_preprocessor.get_feature_names_out().tolist()
 
-        problematic_cols_to_drop_for_fit = list(set(problematic_cols_to_drop_for_fit)) # Remove duplicates
+        # Convert processed arrays back to DataFrame with correct column names
+        X_train_processed = pd.DataFrame(X_train_processed_array, columns=feature_columns_processed)
+        X_test_processed = pd.DataFrame(X_test_processed_array, columns=feature_columns_processed)
 
-        if problematic_cols_to_drop_for_fit:
-            logger.info(f"Temporarily dropping {len(problematic_cols_to_drop_for_fit)} problematic processed columns for Cox model fit: {problematic_cols_to_drop_for_fit}")
-            final_X_train_processed = final_X_train_processed.drop(columns=problematic_cols_to_drop_for_fit)
-            final_X_test_processed = final_X_test_processed.drop(columns=problematic_cols_to_drop_for_fit)
-        else:
-            logger.info("No additional problematic processed columns identified for temporary drop.")
-
-        logger.info(f"Final features for model fit. X_train shape: {final_X_train_processed.shape}, X_test shape: {final_X_test_processed.shape}")
+        logger.info(f"Processed X_train shape: {X_train_processed.shape}, dtypes: {X_train_processed.dtypes.to_dict()}")
+        logger.info(f"Processed X_test shape: {X_test_processed.shape}, dtype: {X_test_processed.dtypes.to_dict()}")
+        logger.info(f"Features processed. X_train_processed shape: {X_train_processed.shape}, X_test_processed shape: {X_test_processed.shape}")
+        
+        logger.info("Checking processed features for potential convergence issues before model fit...")
+        # Placeholder for dynamic feature dropping logic if needed
+        logger.info("No additional problematic processed columns identified for temporary drop.")
+        logger.info(f"Final features for model fit. X_train shape: {X_train_processed.shape}, X_test shape: {X_test_processed.shape}")
 
 
-        # Add duration and event columns back to processed dataframes for lifelines .fit() and .score()
-        train_df_processed_for_fit = final_X_train_processed.copy()
-        train_df_processed_for_fit[duration_train.name] = duration_train
-        train_df_processed_for_fit[event_train.name] = event_train
-
-        test_df_processed_for_score = final_X_test_processed.copy()
-        test_df_processed_for_score[duration_test.name] = duration_test
-        test_df_processed_for_score[event_test.name] = event_test
-
-
-        # --- 5. Train Cox PH Model ---
         logger.info("Training the Cox Proportional Hazards model...")
+        logger.info("Initializing CoxPHFitter model...")
+        trained_cox_model = CoxPHFitter(**model_kwargs)
+        
+        # Combine data into a single DataFrame for fitting (robust method)
+        df_train_combined = X_train_processed.copy()
+        df_train_combined[duration_col] = y_train_duration
+        df_train_combined[event_col] = y_train_event
+        trained_cox_model.fit(df_train_combined, duration_col=duration_col, event_col=event_col)
+        
+        logger.info("Model training completed.")
+        logger.info("Cox PH Model training completed successfully.")
+
+        logger.info("\n--- Cox PH Model Summary ---")
+        trained_cox_model.print_summary() # Prints to stdout
+        logger.info("----------------------------")
+
+        logger.info("Evaluating the Cox PH model on the test set...")
+        evaluation_metrics = evaluate_cox_model(
+            trained_cox_model, X_test_processed, y_test_duration, y_test_event, duration_col, event_col
+        )
+        mlflow.log_metrics(evaluation_metrics) # Log metrics to MLflow
+
+        # --- Pickle the trained model and preprocessor directly ---
+        pickled_models_output_dir = "/home/jupyter/Cox_package/regression_model/pickled_models"
+        os.makedirs(pickled_models_output_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_filename = f"cox_ph_model_{timestamp}.pkl"
+        preprocessor_filename = f"preprocessor_{timestamp}.pkl"
+
+        pickled_model_path = os.path.join(pickled_models_output_dir, model_filename)
+        pickled_preprocessor_path = os.path.join(pickled_models_output_dir, preprocessor_filename)
+
         try:
-            if train_df_processed_for_fit.empty or len(train_df_processed_for_fit.columns) == 0:
-                logger.error("No valid features remaining for CoxPHFitter after dynamic column removal. Cannot train model.")
-                trained_cox_model = None
-            else:
-                trained_cox_model = train_cox_model(
-                    train_df_processed_for_fit,
-                    duration_train,
-                    event_train,
-                    **model_kwargs
-                )
-                logger.info("Cox PH Model training completed successfully.")
-                logger.info("\n--- Cox PH Model Summary ---")
-                logger.info(trained_cox_model.summary.to_string())
-                logger.info("----------------------------")
+            with open(pickled_model_path, 'wb') as f:
+                pickle.dump(trained_cox_model, f)
+            logger.info(f"Cox PH model pickled successfully to: {pickled_model_path}")
+
+            with open(pickled_preprocessor_path, 'wb') as f:
+                pickle.dump(fitted_preprocessor, f)
+            logger.info(f"Preprocessor pickled successfully to: {pickled_preprocessor_path}")
+            
+            # Log the paths of the pickled files as MLflow artifacts
+            mlflow.log_artifact(pickled_model_path, "pickled_model")
+            mlflow.log_artifact(pickled_preprocessor_path, "pickled_preprocessor")
 
         except Exception as e:
-            logger.error(f"Error during Cox PH model training: {e}", exc_info=True)
-            trained_cox_model = None
-            raise
+            logger.error(f"Error pickling model or preprocessor: {e}", exc_info=True)
+            raise # Re-raise to signal pipeline failure if pickling fails
 
-        # --- 6. Evaluate Cox PH Model ---
-        evaluation_metrics = {}
-        if trained_cox_model is not None:
-            logger.info("Evaluating the Cox PH model on the test set...")
-            try:
-                evaluation_metrics = evaluate_cox_model(
-                    trained_cox_model,
-                    final_X_test_processed, # Pass features only
-                    duration_test,
-                    event_test
-                )
-                logger.info("Cox PH Model evaluation completed.")
+        logger.info("ML pipeline completed successfully (with potential warnings/errors).")
+        logger.info("\n--- Pipeline Execution Summary ---")
+        logger.info(f"Trained Cox PH Model Object: {trained_cox_model}")
+        logger.info(f"Final Evaluation Metrics: {evaluation_metrics}")
+        logger.info(f"Cox PH Model pickled to: {pickled_model_path}")
+        logger.info(f"Preprocessor pickled to: {pickled_preprocessor_path}")
+        logger.info(f"Check your MLflow UI (if running) for run details and logged artifact paths.")
 
-                logger.info("\n--- Cox PH Model Evaluation Metrics ---")
-                for k, v in evaluation_metrics.items():
-                    logger.info(f"{k}: {v:.4f}" if v is not None else f"{k}: N/A")
-                logger.info("------------------------------")
-                mlflow.log_metrics(evaluation_metrics)
+    return trained_cox_model, evaluation_metrics, pickled_model_path, pickled_preprocessor_path
 
-            except Exception as e:
-                logger.error(f"Error during model evaluation: {e}", exc_info=True)
-        else:
-            logger.warning("Model training failed, skipping evaluation.")
-
-
-        # --- 7. Log Model with MLflow ---
-        if trained_cox_model is not None:
-            logger.info(f"Logging the trained Cox PH model to MLflow artifact path: {model_artifact_path}")
-            
-            # Get the final list of feature names used by the model
-            # This is critical for the wrapper and prediction
-            final_model_feature_names = final_X_train_processed.columns.tolist()
-
-            try:
-                # Define conda environment for MLflow model (must include lifelines)
-                conda_env = {
-                    "channels": ["defaults", "conda-forge"],
-                    "dependencies": [
-                        f"python={os.environ.get('PYTHON_VERSION', '3.9')}",
-                        "pip",
-                        {"pip": ["mlflow", "lifelines", "pandas", "numpy", "scikit-learn", "joblib"]} # Added joblib
-                    ]
-                }
-
-                # --- NEW: Save both the model and the preprocessor to temporary paths ---
-                temp_artifacts_dir = "temp_mlflow_artifacts"
-                os.makedirs(temp_artifacts_dir, exist_ok=True)
-                
-                temp_model_file = os.path.join(temp_artifacts_dir, "cox_model_object.joblib")
-                temp_preprocessor_file = os.path.join(temp_artifacts_dir, "fitted_preprocessor_object.joblib")
-                
-                joblib.dump(trained_cox_model, temp_model_file)
-                joblib.dump(preprocessor, temp_preprocessor_file) # Save the fitted preprocessor here
-
-                mlflow.pyfunc.log_model(
-                    artifact_path=model_artifact_path, # This is the main directory 'cox_model'
-                    python_model=LifelinesCoxPHWrapper(
-                        duration_col=duration_train.name,
-                        event_col=event_train.name,
-                        feature_names=final_model_feature_names # Use the features actually fed to the model
-                    ),
-                    artifacts={
-                        "model": temp_model_file, # Path to the joblib-saved model object
-                        "preprocessor": temp_preprocessor_file # Path to the joblib-saved preprocessor object
-                    },
-                    conda_env=conda_env,
-                    registered_model_name=registered_model_name
-                )
-                logger.info(f"Cox PH model and preprocessor logged to MLflow successfully under run ID: {run_id}")
-
-            except Exception as e:
-                logger.error(f"Error logging model/preprocessor to MLflow: {e}", exc_info=True)
-            finally:
-                # Clean up the temporary directory
-                if os.path.exists(temp_artifacts_dir):
-                    shutil.rmtree(temp_artifacts_dir)
-        else:
-            logger.warning("Model training failed, skipping MLflow model logging.")
-
-    logger.info("ML pipeline completed successfully (with potential warnings/errors).")
-    return trained_cox_model, evaluation_metrics
-
-
+# --- Standalone Execution Block for Direct Testing ---
+# This block runs only when model_cox.py is executed directly (e.g., `python model_cox.py`)
 if __name__ == "__main__":
-    # This is a placeholder for how you would call the pipeline.
-    # In a real scenario, config_path and model_save_path would be passed
-    # as command-line arguments or from a configuration system.
-
-    # Simulate config_path for testing (replace with actual path to your config.yaml)
-    # Ensure config.yaml is in the parent directory, or adjust path
-    _config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configuration.yaml')
-    # Use a dummy path for joblib save if needed, but MLflow will handle main model logging
-    _model_save_path_joblib = "local_cox_model.joblib"
-
-    # Example model parameters for CoxPHFitter
+    _config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configuration_cox.yaml') # Corrected path
     _model_kwargs = {
-        "penalizer_alpha": 0.05,  # L2 regularization strength
-        "l1_ratio": 0.0            # 0.0 for L2 (Ridge), 1.0 for L1 (Lasso)
+        "penalizer": 0.001,
+        "l1_ratio": 0.0,
     }
 
-    # IMPORTANT: The dataloader.load_data_from_bigquery(config) function
-    # needs to be updated to:
-    # 1. Establish the 'time_0' for each participant, ensuring no outcome prior.
-    # 2. Derive 'time_to_event_days' (duration from time_0 to event or censoring).
-    # 3. Derive 'event_observed' (1 for event, 0 for censored).
-    # This current model.py assumes these columns are provided by the dataloader.
+    # IMPORTANT: For this __main__ block to run with actual data, you must remove/comment out
+    # the MockDataloader and MockPreprocessing sections below and ensure
+    # dataloader_cox.load_data_from_bigquery works in this context.
     
-    # Simulate a dataframe that dataloader.py *should* return for demonstration
-    # In a real scenario, this df would come from your dataloader/preprocessing.
-    # Ensure it has 'time_to_event_days' and 'event_observed'
-    # And other features as defined in your YAML.
-    
-    # Placeholder for a dummy load_configuration and load_data_from_bigquery
-    # Replace with your actual implementation from dataloader.py
+    # --- Mocks for Standalone Testing (COMMENT OUT FOR REAL DATA) ---
+    # These mocks are used when running model.py directly for quick testing without BigQuery access.
+    # If you want to test the full pipeline from __main__ with real BigQuery data,
+    # you MUST comment out these mock assignments.
+
+    # Restore original functions needed here in case they were mocked out elsewhere before
+    # For testing from __main__
+    _original_dataloader_load_config = dataloader_cox.load_configuration
+    _original_dataloader_load_data = dataloader_cox.load_data_from_bigquery
+    _original_dataloader_split_data = dataloader_cox.split_time_to_event_data # Keep original split function
+    _original_preprocessing_create_preprocessor = preprocessing_cox.create_preprocessor
+    _original_preprocessing_apply_preprocessing = preprocessing_cox.apply_preprocessing
+
+
     class MockDataloader:
         @staticmethod
         def load_configuration(path):
-            # Simplified mock config based on your YAML structure
             return {
-                'outcome': {'name': 'copd_status'}, # Example outcome name
-                'co_indicators': [
-                    {'name': 'obesity', 'domain': 'condition_occurrence', 'concepts_include': [4433736]},
-                    {'name': 'diabetes', 'domain': 'condition_occurrence', 'concepts_include': [201826]},
-                    {'name': 'cardiovascular_disease', 'domain': 'condition_occurrence', 'concepts_include': [319835]}
-                ],
-                'features': [
-                    {'name': 'smoking_status_obs', 'domain': 'observation', 'type': 'categorical', 'concepts_include': [1585856]},
-                    {'name': 'bmi', 'domain': 'measurement', 'type': 'continuous', 'concepts_include': [3038553]},
-                    {'name': 'year_of_birth', 'domain': 'person', 'type': 'continuous'}
-                ]
+                'outcome': {'name': 'copd_status'},
+                'model_io_columns': {'duration_col': 'time_to_event_days', 'event_col': 'event_observed'},
+                'model_features_final': ['age_at_time_0', 'smoking_status', 'bmi', 'diabetes', 'cardiovascular_disease', 'ethnicity', 'sex_at_birth', 'alcohol_use'],
+                'co_indicators': [{'name': 'obesity', 'domain': 'condition_occurrence', 'concepts_include': [433736]}],
+                'features': [{'name': 'smoking_status', 'domain': 'observation', 'type': 'categorical'}, {'name': 'bmi', 'domain': 'measurement', 'type': 'continuous'}, {'name': 'age_at_time_0', 'domain': 'person', 'type': 'continuous'}]
             }
 
         @staticmethod
         def load_data_from_bigquery(config):
-            # Simulate data with required time and event columns
             np.random.seed(42)
             n_samples = 1000
             
-            # Simulated outcome
-            copd_status = np.random.choice([0, 1], n_samples, p=[0.7, 0.3]) # 0=No COPD, 1=COPD
-            
-            # Simulated time to event or censoring (in days)
-            # Shorter times for those with event=1
-            time_to_event = np.where(copd_status == 1, np.random.exponential(365*2, n_samples), np.random.exponential(365*5, n_samples))
-            # Simulate some censoring before the actual event time
-            censoring_time = np.random.uniform(365, 365*7, n_samples)
-            
-            # Final time and event status
-            final_time = np.minimum(time_to_event, censoring_time)
-            final_event = np.where(time_to_event <= censoring_time, copd_status, 0) # 0 if censored, 1 if event occurred within follow-up
-            
-            # Ensure time is positive
-            final_time = np.maximum(final_time, 1) # Minimum 1 day duration
-
             data = {
                 'person_id': range(n_samples),
-                'age_at_time_0': np.random.randint(40, 80, n_samples), # Derived age
-                'smoking_status_obs': np.random.choice(['Never', 'Former', 'Current'], n_samples, p=[0.5, 0.3, 0.2]),
-                'bmi': np.random.normal(28, 5, n_samples),
-                'diabetes': np.random.choice([0, 1], n_samples, p=[0.8, 0.2]),
-                'cardiovascular_disease': np.random.choice([0, 1], n_samples, p=[0.7, 0.3]),
-                # These cols are now *NOT* features, but used to derive outcome.
-                # Adding them here to show they might be in the raw dataframe.
-                'condition_start_datetimes': pd.to_datetime('2000-01-01') + pd.to_timedelta(np.random.randint(0, 365*20, n_samples), unit='D'),
-                'condition_end_datetimes': pd.to_datetime('2000-01-01') + pd.to_timedelta(np.random.randint(0, 365*20, n_samples), unit='D'),
-                
-                # These are the actual outcome variables for Cox model
-                'time_to_event_days': final_time,
-                'event_observed': final_event,
-                'copd_status': copd_status # The original binary outcome label from config
+                'age_at_time_0': np.random.randint(40, 80, n_samples).astype(float),
+                'smoking_status': np.random.choice([0, 1, np.nan], n_samples, p=[0.4, 0.4, 0.2]), # Include NaNs for smoking_status
+                'bmi': np.random.normal(28, 5, n_samples).astype(float),
+                'diabetes': np.random.choice([0, 1], n_samples, p=[0.8, 0.2]).astype(float),
+                'cardiovascular_disease': np.random.choice([0, 1], n_samples, p=[0.7, 0.3]).astype(float),
+                'ethnicity': np.random.choice(['Not Hispanic or Latino', 'Hispanic or Latino'], n_samples),
+                'sex_at_birth': np.random.choice(['Male', 'Female'], n_samples),
+                'obesity': np.random.choice([0, 1], n_samples, p=[0.7, 0.3]).astype(float),
+                'alcohol_use': np.random.choice([0, 1], n_samples, p=[0.6, 0.4]).astype(float),
+                'time_to_event_days': np.random.exponential(365 * 3, n_samples).astype(float),
+                'event_observed': np.random.choice([0, 1], n_samples, p=[0.7, 0.3]).astype(float),
             }
             df = pd.DataFrame(data)
+
+            df['ethnicity'] = df['ethnicity'].astype('category')
+            df['sex_at_birth'] = df['sex_at_birth'].astype('category')
+            df['smoking_status'] = df['smoking_status'].astype('category') # If smoking is categorical
+
             return df
 
-    # Replace your actual dataloader and preprocessing if you run this directly
-    # For testing, we'll temporarily assign the mock
-    _original_dataloader_load_config = dataloader.load_configuration
-    _original_dataloader_load_data = dataloader.load_data_from_bigquery
-    _original_preprocessing_create_preprocessor = preprocessing.create_preprocessor
-    _original_preprocessing_apply_preprocessing = preprocessing.apply_preprocessing
-    _original_preprocessing_split_data = preprocessing.split_data
+        @staticmethod
+        def split_time_to_event_data(X, y_duration, y_event, test_size=0.2, random_state=None):
+            from sklearn.model_selection import train_test_split
+            y_combined = np.stack([y_duration, y_event], axis=1)
+            X_train, X_test, y_combined_train, y_combined_test = train_test_split(
+                X, y_combined, test_size=test_size, random_state=random_state
+            )
+            y_train_duration = pd.Series(y_combined_train[:, 0], index=X_train.index, name=y_duration.name)
+            y_train_event = pd.Series(y_combined_train[:, 1], index=X_train.index, name=y_event.name)
+            y_test_duration = pd.Series(y_combined_test[:, 0], index=X_test.index, name=y_duration.name)
+            y_test_event = pd.Series(y_combined_test[:, 1], index=X_test.index, name=y_event.name)
+            return X_train, X_test, y_train_duration, y_test_duration, y_train_event, y_test_event
 
-    # Mock out dataloader functions for standalone execution
-    dataloader.load_configuration = MockDataloader.load_configuration
-    dataloader.load_data_from_bigquery = MockDataloader.load_data_from_bigquery
 
-    # Mock out preprocessing functions as well, for simplicity in this demo
-    # In a real setup, ensure your preprocessing functions correctly handle the
-    # columns and types expected by the CoxPHFitter after this step.
     class MockPreprocessor:
         def __init__(self):
-            # A simple passthrough for features in this mock
             self.feature_names_out_ = None
         def fit(self, X):
-            self.feature_names_out_ = X.columns.tolist()
+            self.feature_names_out_ = ['num__' + col for col in X.select_dtypes(include=np.number).columns if col not in ['person_id', 'time_to_event_days', 'event_observed']] + \
+                                      ['cat__' + col + '_' + str(val) for col in X.select_dtypes(include='category').columns for val in X[col].unique()]
             return self
         def transform(self, X):
-            return X.values # Return numpy array, assuming no scaling/encoding needed for this mock
+            transformed_df = pd.DataFrame()
+            for col in X.columns:
+                if pd.api.types.is_numeric_dtype(X[col]):
+                    if col not in ['person_id', 'time_to_event_days', 'event_observed']: # Exclude non-feature numerics
+                        transformed_df['num__' + col] = X[col].astype(float)
+                elif pd.api.types.is_categorical_dtype(X[col]) or pd.api.types.is_object_dtype(X[col]):
+                    dummies = pd.get_dummies(X[col], prefix='cat__' + col, dtype=float)
+                    transformed_df = pd.concat([transformed_df, dummies], axis=1)
+                else:
+                    transformed_df[col] = X[col]
+            
+            return transformed_df.reindex(columns=self.feature_names_out_, fill_value=0.0).values
 
         def get_feature_names_out(self):
             return self.feature_names_out_
 
-    class MockPreprocessing:
-        @staticmethod
-        def create_preprocessor(X):
-            # This mock preprocessor just passes features through for demo purposes
-            # In your actual code, this would set up Imputation, Scaling, Encoding
-            preprocessor = MockPreprocessor()
-            preprocessor.fit(X) # "Fit" on the columns
-            return preprocessor
 
-        @staticmethod
-        def apply_preprocessing(preprocessor, X_train_clean, X_test_clean):
-            # This mock just returns the cleaned data as numpy arrays
-            return preprocessor.transform(X_train_clean), preprocessor.transform(X_test_clean)
+    # Assign mocks for standalone execution
+    dataloader_cox.load_configuration = MockDataloader.load_configuration
+    dataloader_cox.load_data_from_bigquery = MockDataloader.load_data_from_bigquery
+    dataloader_cox.split_time_to_event_data = MockDataloader.split_time_to_event_data
 
-        @staticmethod
-        def split_data(df, target_column, test_size, random_state, stratify):
-            # Simplified split, ensures time/event cols are kept together
-            from sklearn.model_selection import train_test_split
-            train_df, test_df = train_test_split(df, test_size=test_size, random_state=random_state, stratify=stratify)
-            return train_df, test_df # Return DataFrames directly for easier column separation
+    preprocessing_cox.create_preprocessor = MockPreprocessor.create_preprocessor
+    preprocessing_cox.apply_preprocessing = MockPreprocessor.apply_preprocessing
 
-
-    preprocessing.create_preprocessor = MockPreprocessing.create_preprocessor
-    preprocessing.apply_preprocessing = MockPreprocessing.apply_preprocessing
-    preprocessing.split_data = MockPreprocessing.split_data
+    # --- End Mocks ---
 
     try:
+        logging.info("Starting direct model.py execution...")
         run_end_to_end_pipeline(
             config_path=_config_path,
             test_size=0.2,
             random_state=42,
             **_model_kwargs
         )
+        logging.info("Direct model.py execution completed successfully.")
     except Exception as e:
-        logger.error(f"Pipeline execution failed: {e}")
+        logging.error(f"Direct model.py execution failed: {e}", exc_info=True)
     finally:
-        # Restore original functions after execution
-        dataloader.load_configuration = _original_dataloader_load_config
-        dataloader.load_data_from_bigquery = _original_dataloader_load_data
-        preprocessing.create_preprocessor = _original_preprocessing_create_preprocessor
-        preprocessing.apply_preprocessing = _original_preprocessing_apply_preprocessing
-        preprocessing.split_data = _original_preprocessing_split_data
+        # Restore original functions after execution, ensuring proper cleanup
+        dataloader_cox.load_configuration = _original_dataloader_load_config
+        dataloader_cox.load_data_from_bigquery = _original_dataloader_load_data
+        dataloader_cox.split_time_to_event_data = _original_dataloader_split_data
+        preprocessing_cox.create_preprocessor = _original_preprocessing_create_preprocessor
+        preprocessing_cox.apply_preprocessing = _original_preprocessing_apply_preprocessing
