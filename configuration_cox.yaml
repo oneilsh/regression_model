@@ -43,7 +43,7 @@ co_indicators:
   - name: obesity
     description: Diagnosis of obesity (chronic condition)
     # For chronic conditions, we primarily look for presence at time_0 via condition_era
-    primary_domain: condition_era # Explicitly use condition_era for presence check
+    primary_domain: condition_occurrence # Explicitly use condition_era for presence check
     lookback_strategy: chronic_ongoing # Assume presence if started anytime before time_0 and not ended
     concepts_include:
       - 4433736    # SNOMED code for obesity
@@ -51,7 +51,7 @@ co_indicators:
 
   - name: diabetes
     description: Diagnosis of type 2 diabetes mellitus (chronic condition)
-    primary_domain: condition_era # Explicitly use condition_era for presence check
+    primary_domain: condition_occurrence # Explicitly use condition_era for presence check
     lookback_strategy: chronic_ongoing # Assume presence if started anytime before time_0 and not ended
     concepts_include:
       - 201826     # SNOMED code for type 2 diabetes mellitus
@@ -59,7 +59,7 @@ co_indicators:
 
   - name: cardiovascular_disease
     description: History of cardiovascular diseases (chronic condition)
-    primary_domain: condition_era # Explicitly use condition_era for presence check
+    primary_domain: condition_occurrence # Explicitly use condition_era for presence check
     lookback_strategy: chronic_ongoing # Assume presence if started anytime before time_0 and not ended
     concepts_include:
       - 319835     # SNOMED code for heart failure
@@ -125,6 +125,29 @@ features:
     # No specific concepts_include/exclude as it's a direct field from PERSON table.
     concepts_include: []
     concepts_exclude: []
+    
+  - name: age_at_time_0 
+    domain: person
+    type: continuous
+    description: Age of person at time_0 (calculated by dataloader) 
+    concepts_include: []
+    concepts_exclude: []
+  
+# --- NEW SECTION FOR MODEL INPUT/OUTPUT COLUMN NAMES ---
+model_io_columns:
+  duration_col: time_to_event_days  # This is the derived column name for event duration
+  event_col: event_observed        # This is the derived column name for event indicator
+  
+model_features_final:
+  - ethnicity
+  - sex_at_birth
+  - obesity
+  - diabetes
+  - cardiovascular_disease
+  - smoking_status
+  - alcohol_use
+  - bmi
+  - age_at_time_0
 
 # --- Features REMOVED to prevent data leakage and for clarity ---
 # The following features have been removed from this 'features' section because
