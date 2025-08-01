@@ -18,9 +18,9 @@ First, open a terminal in your Jupyter environment and clone the project reposit
 
 Bash
 
-git clone https://github.com/Lakshmi2819/regression_model.git
+_git clone https://github.com/Lakshmi2819/regression_model.git_
 
-cd regression_model
+_cd regression_model_
 
 
 **Step 2: Install Dependencies**
@@ -31,7 +31,7 @@ This command installs the twinsight_model project itself, along with its core de
 
 Python
 
-! pip install --force-reinstall git+https://github.com/Lakshmi2819/regression_model
+_! pip install --force-reinstall git+https://github.com/Lakshmi2819/regression_model_
 
 
 Cell 2: Install Additional Requirements
@@ -39,11 +39,10 @@ This command installs any remaining or additional dependencies specified in the 
 
 Python
 
-!pip install -r requirements.txt 
+_!pip install -r requirements.txt_
 
-# IMPORTANT: You must restart the kernel after running this cell
-# to ensure all newly installed packages are loaded correctly.
-# In Jupyter, go to 'Kernel' -> 'Restart Kernel'.
+IMPORTANT: You must restart the kernel after running this cell to ensure all newly installed packages are loaded correctly.
+In Jupyter, go to 'Kernel' -> 'Restart Kernel'.
 
 
 After restarting the kernel, you are ready to proceed to the next step.
