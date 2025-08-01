@@ -64,9 +64,11 @@ Once you have successfully completed the setup steps and restarted your kernel, 
 
 Python
 
-from twinsight_model.dataloader_cox import load_configuration, load_data_from_bigquery
-from twinsight_model.preprocessing_cox import split_data, create_preprocessor, apply_preprocessing, OutlierCapper
-from twinsight_model.model_cox import run_end_to_end_pipeline
+_from twinsight_model.dataloader_cox import load_configuration, load_data_from_bigquery_
+
+_from twinsight_model.preprocessing_cox import split_data, create_preprocessor, apply_preprocessing, OutlierCapper_
+
+_from twinsight_model.model_cox import run_end_to_end_pipeline_
 
 Troubleshooting
 NumPy 1.x vs 2.x Conflict
