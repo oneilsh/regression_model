@@ -1,16 +1,18 @@
-# Core dependencies
+# Core dependencies from pyproject.toml
 pandas==2.3.1
 numpy==1.26.4
-scikit-learn>=1.0.0
+scikit-learn==1.7.1
 lifelines==0.30.0
-pyarrow==20.0.0
-google-cloud-bigquery==2.34.4
-PyYAML==6.0.1
+pyarrow==9.0.0
+google-cloud-bigquery==3.35.1
+PyYAML==6.0.2
 
-# Optional but commonly used in modeling and data analysis
-matplotlib>=3.4.0       # For plotting
-seaborn>=0.11.0         # For statistical data visualization
-pyyaml>=5.4.0           # For working with YAML config files
-joblib>=1.0.0           # For model serialization
-click>=8.0.0            # For building CLI interfaces (if using CLI like `twinsight-cli`)
-tqdm>=4.62.0            # For progress bars
+# Additional dependencies discovered through testing
+mlflow==3.1.1
+
+# Other common dependencies you've used (can be removed if not needed)
+matplotlib==3.7.3
+seaborn==0.11.0
+joblib==1.5.1
+click==8.1.8
+tqdm==4.62.0
