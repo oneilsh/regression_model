@@ -48,6 +48,7 @@ In Jupyter, go to 'Kernel' -> 'Restart Kernel'.
 After restarting the kernel, you are ready to proceed to the next step.
 
 **Project Structure**
+
 The repository contains the following key files and directories:
 
 Cox_model.ipynb: A sample Jupyter Notebook for running the model.
