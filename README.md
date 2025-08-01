@@ -1,7 +1,7 @@
 # Regression-Model
 The generalized version of the minimal Python package structure is designed for modeling on the All of Us or synthetic FHIR data with proper abstraction and placeholders for researchers or developers to plug in their own variable names, data sources, and model types.
 
-Prerequisites
+**Prerequisites**
 
 A working Python 3.10 environment.
 
@@ -9,17 +9,20 @@ Git installed to clone the repository.
 
 Access to a Jupyter Notebook or a similar environment (e.g., All of Us workbench).
 
-Setup Guide
+**Setup Guide**
+
 To get the project up and running in a new Jupyter Notebook environment, follow these steps in the exact order specified. This sequence has been tested and is designed to resolve dependency conflicts in environments like the All of Us workbench.
 
-Step 1: Clone the Repository
+**Step 1: Clone the Repository**
 First, open a terminal in your Jupyter environment and clone the project repository. This will download all the project files, including the requirements.txt file.
 
 Bash
 
 git clone https://github.com/Lakshmi2819/regression_model.git
 cd regression_model
-Step 2: Install Dependencies
+
+
+**Step 2: Install Dependencies**
 Open a new Jupyter Notebook and run the following two cells in order. This process ensures all dependencies are installed correctly, addressing version conflicts with pre-installed packages.
 
 Cell 1: Install the Project from Git
@@ -40,7 +43,7 @@ Python
 # In Jupyter, go to 'Kernel' -> 'Restart Kernel'.
 After restarting the kernel, you are ready to proceed to the next step.
 
-Project Structure
+**Project Structure**
 The repository contains the following key files and directories:
 
 Cox_model.ipynb: A sample Jupyter Notebook for running the model.
