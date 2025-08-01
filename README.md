@@ -31,16 +31,20 @@ This command installs the twinsight_model project itself, along with its core de
 Python
 
 ! pip install --force-reinstall git+https://github.com/Lakshmi2819/regression_model
+
+
 Cell 2: Install Additional Requirements
 This command installs any remaining or additional dependencies specified in the requirements.txt file.
 
 Python
 
-!pip install -r requirements.txt
+!pip install -r requirements.txt 
 
 # IMPORTANT: You must restart the kernel after running this cell
 # to ensure all newly installed packages are loaded correctly.
 # In Jupyter, go to 'Kernel' -> 'Restart Kernel'.
+
+
 After restarting the kernel, you are ready to proceed to the next step.
 
 **Project Structure**
@@ -63,10 +67,6 @@ from twinsight_model.dataloader_cox import load_configuration, load_data_from_bi
 from twinsight_model.preprocessing_cox import split_data, create_preprocessor, apply_preprocessing, OutlierCapper
 from twinsight_model.model_cox import run_end_to_end_pipeline
 
-# Example of how you might use the functions:
-# config = load_configuration(...)
-# data = load_data_from_bigquery(...)
-# run_end_to_end_pipeline(config, data)
 Troubleshooting
 NumPy 1.x vs 2.x Conflict
 
