@@ -7,7 +7,7 @@ A working Python 3.10 environment.
 
 Git installed to clone the repository.
 
-Access to a Jupyter Notebook or a similar environment (e.g., All of Us workbench).
+Access to a Jupyter Notebook in All of Us workbench.
 
 **Setup Guide**
 
@@ -19,6 +19,7 @@ First, open a terminal in your Jupyter environment and clone the project reposit
 Bash
 
 git clone https://github.com/Lakshmi2819/regression_model.git
+
 cd regression_model
 
 
