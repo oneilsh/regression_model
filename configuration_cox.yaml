@@ -41,6 +41,7 @@ outcome:
 # Co-morbidities or related conditions that serve as indicators alongside the target condition
 co_indicators:
   - name: obesity
+    domain: "condition_occurrence"
     description: Diagnosis of obesity (chronic condition)
     # For chronic conditions, we primarily look for presence at time_0 via condition_era
     primary_domain: condition_occurrence # Explicitly use condition_era for presence check
@@ -50,6 +51,7 @@ co_indicators:
     concepts_exclude: []
 
   - name: diabetes
+    domain: "condition_occurrence"
     description: Diagnosis of type 2 diabetes mellitus (chronic condition)
     primary_domain: condition_occurrence # Explicitly use condition_era for presence check
     lookback_strategy: chronic_ongoing # Assume presence if started anytime before time_0 and not ended
@@ -58,6 +60,7 @@ co_indicators:
     concepts_exclude: []
 
   - name: cardiovascular_disease
+    domain: condition_occurrence
     description: History of cardiovascular diseases (chronic condition)
     primary_domain: condition_occurrence # Explicitly use condition_era for presence check
     lookback_strategy: chronic_ongoing # Assume presence if started anytime before time_0 and not ended
