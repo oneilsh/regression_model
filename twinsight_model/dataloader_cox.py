@@ -327,9 +327,15 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
     # --- Step 5: Derive Outcome (time_to_event_days, event_observed) ---
     logging.info("Step 5: Deriving time_to_event_days and event_observed...")
     # Convert time_0, obs_end, and actual_outcome to datetime objects and make them timezone-naive
-    person_df['time_0_dt'] = pd.to_datetime(person_df['time_0']).dt.tz_localize(None) # Make timezone-naive
-    person_df['obs_end_dt'] = pd.to_datetime(person_df['observation_period_end_date']).dt.tz_localize(None) # Make timezone-naive
-    person_df['actual_outcome_dt'] = pd.to_datetime(person_df['actual_outcome_datetime']).dt.tz_localize(None) # Make timezone-naive
+    # person_df['time_0_dt'] = pd.to_datetime(person_df['time_0']).dt.tz_localize(None) # Make timezone-naive
+    # person_df['obs_end_dt'] = pd.to_datetime(person_df['observation_period_end_date']).dt.tz_localize(None) # Make timezone-naive
+    # person_df['actual_outcome_dt'] = pd.to_datetime(person_df['actual_outcome_datetime']).dt.tz_localize(None) # Make timezone-naive
+    common_datetime_format = "%Y-%m-%dT%H:%M:%S.%f%z"
+
+    # Now, use the format argument in each call to pd.to_datetime
+    person_df['time_0_dt'] = pd.to_datetime(person_df['time_0'], format=common_datetime_format, errors='coerce').dt.tz_localize(None)
+    person_df['obs_end_dt'] = pd.to_datetime(person_df['observation_period_end_date'], format=common_datetime_format, errors='coerce').dt.tz_localize(None)
+    person_df['actual_outcome_dt'] = pd.to_datetime(person_df['actual_outcome_datetime'], format=common_datetime_format, errors='coerce').dt.tz_localize(None)
 
 
     # Calculate event_observed (1 if outcome occurred AFTER time_0, 0 otherwise)
