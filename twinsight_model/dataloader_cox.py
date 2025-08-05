@@ -201,9 +201,16 @@ def get_all_outcome_events_query(outcome_config: Dict[str, Any], cdr_path: str) 
     outcome_concept_id_col_name = 'condition_concept_id' # Assuming condition_occurrence for outcome
     outcome_date_col_name = 'condition_start_datetime'
 
-    concept_filter_clause = _get_concept_filter_sql("t", outcome_concept_id_col_name, outcome_config, cdr_path)
-    if concept_filter_clause:
-        concept_filter_clause = f"WHERE {concept_filter_clause}"
+    concept_filter_conditions = _get_concept_filter_sql("t", outcome_concept_id_col_name, outcome_config, cdr_path)
+
+    # Collect all WHERE conditions
+    where_clauses = [f"t.{outcome_date_col_name} IS NOT NULL"]
+    if concept_filter_conditions:
+        where_clauses.append(concept_filter_conditions)
+
+    final_where_clause = ""
+    if where_clauses:
+        final_where_clause = f"WHERE {' AND '.join(where_clauses)}"
 
     return f"""
     SELECT
@@ -211,9 +218,7 @@ def get_all_outcome_events_query(outcome_config: Dict[str, Any], cdr_path: str) 
         t.{outcome_date_col_name} AS outcome_datetime
     FROM
         `{cdr_path}.{outcome_domain}` t
-    {concept_filter_clause}
-    WHERE
-        t.{outcome_date_col_name} IS NOT NULL
+    {final_where_clause}
     """
 
 
