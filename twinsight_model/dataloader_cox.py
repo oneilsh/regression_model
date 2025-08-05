@@ -160,9 +160,16 @@ def build_domain_events_query(domain_name: str, concept_config: Dict[str, Any], 
         logging.warning(f"Domain '{domain_name}' not fully supported for event extraction. Skipping.")
         return "" # Return empty if domain not handled
 
-    concept_filter_clause = _get_concept_filter_sql("t", concept_id_col_name, concept_config, cdr_path)
-    if concept_filter_clause:
-        concept_filter_clause = f"WHERE {concept_filter_clause}"
+    concept_filter_conditions = _get_concept_filter_sql("t", concept_id_col_name, concept_config, cdr_path)
+
+    # Collect all WHERE conditions
+    where_clauses = [f"t.{date_col_name} IS NOT NULL"]
+    if concept_filter_conditions:
+        where_clauses.append(concept_filter_conditions)
+
+    final_where_clause = ""
+    if where_clauses:
+        final_where_clause = f"WHERE {' AND '.join(where_clauses)}"
 
     sql = f"""
     SELECT
@@ -175,9 +182,7 @@ def build_domain_events_query(domain_name: str, concept_config: Dict[str, Any], 
         '{value_type}' AS value_type
     FROM
         {domain_table} t
-    {concept_filter_clause}
-    WHERE
-        t.{date_col_name} IS NOT NULL
+    {final_where_clause}
     """
     return sql
 
