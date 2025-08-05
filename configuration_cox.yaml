@@ -78,6 +78,7 @@ co_indicators:
 # Individual variables or characteristics to be extracted for modeling
 features:
   - name: smoking_status
+    domain: "observation"
     type: categorical
     description: Consolidated smoking status from various sources
     lookback_strategy: recent_fixed # Use most recent status within a fixed window
@@ -95,6 +96,7 @@ features:
         concepts_exclude: []
 
   - name: alcohol_use
+    domain: "observation"
     type: binary # Or categorical if "never", "occasional", "heavy" are distinct values
     description: Consolidated alcohol use status/history
     lookback_strategy: recent_fixed # Look for recent use/condition
