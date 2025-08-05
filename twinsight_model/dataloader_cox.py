@@ -380,6 +380,9 @@ def load_data_from_bigquery(config: Dict[str, Any]) -> pd.DataFrame:
         feature_name = feature_config['name']
         feature_domain = feature_config['domain']
 
+        feature_domain = feature_config['domain'] # This is the line that's failing
+
+
         if feature_name in excluded_from_feature_extraction or feature_domain == 'person': # Person features already in base query
             continue
 
