@@ -10,6 +10,7 @@ PyYAML==6.0.2
 # Additional dependencies discovered through testing
 mlflow==2.13.0
 protobuf==3.20.0
+packaging==21.3
 
 # Other common dependencies you've used (can be removed if not needed)
 matplotlib==3.7.3
@@ -17,5 +18,6 @@ seaborn==0.11.0
 joblib==1.5.1
 click==8.1.8
 tqdm==4.62.0
+
 
 
