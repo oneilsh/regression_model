@@ -7,11 +7,10 @@ Copy-paste these cells directly into Jupyter. No shell access needed!
 # Run once in fresh AoU environment
 print("🔧 Setting up twinsight_model...")
 
-# Install dependencies without touching pandas
-! pip install lifelines==0.27.5 --no-deps
-! pip install protobuf==3.20.3 --no-deps
+# Install lifelines with its dependencies (should be safe with 0.27.5)
+! pip install lifelines==0.27.5
 
-# Install our package
+# Install our package without dependencies
 ! pip install --no-deps git+https://github.com/oneilsh/regression_model.git
 
 print("✅ Setup complete!")
@@ -44,21 +43,14 @@ print("🧪 Testing wrapper...")
 try:
     from twinsight_model import CoxModelWrapper
     
-    # Test with config
-    config = {
-        'outcome': {'name': 'test_outcome'},
-        'model_features_final': ['age', 'bmi', 'smoking'],
-        'model_io_columns': {
-            'duration_col': 'time_to_event_days',
-            'event_col': 'event_observed'
-        }
-    }
-    
-    model = CoxModelWrapper(config)
-    print(f"✅ Wrapper: {model}")
+    # Test with URL config (real COPD configuration)
+    config_url = 'https://raw.githubusercontent.com/oneilsh/regression_model/refs/heads/main/configuration_cox.yaml'
+    model = CoxModelWrapper(config_url)
+    print(f"✅ Wrapper with URL config: {model}")
     
     schema = model.get_input_schema()
     print(f"✅ Schema: {len(schema['required_features'])} features")
+    print(f"✅ Outcome: {model.outcome_name}")
     
     print("🎉 All tests passed!")
     

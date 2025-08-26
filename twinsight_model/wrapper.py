@@ -8,6 +8,7 @@ twinsight_model functionality while maintaining backward compatibility.
 import os
 import pickle
 import yaml
+import requests
 from typing import Dict, List, Union, Any, Optional
 import pandas as pd
 import logging
@@ -34,21 +35,30 @@ class CoxModelWrapper:
         Initialize the Cox model wrapper.
         
         Args:
-            config: Either a path to a YAML config file or a config dictionary
+            config: Either:
+                - Path to a local YAML config file (str)  
+                - URL to a YAML config file (str starting with http:// or https://)
+                - Config dictionary (dict)
         """
         logger.info("Initializing CoxModelWrapper v0.2.0")
         
         # Load configuration
         if isinstance(config, str):
-            if not os.path.exists(config):
-                raise FileNotFoundError(f"Configuration file not found: {config}")
-            self.config = load_configuration(config)
-            self.config_source = f"file: {config}"
+            if config.startswith(('http://', 'https://')):
+                # Load from URL
+                self.config = self._load_config_from_url(config)
+                self.config_source = f"URL: {config}"
+            else:
+                # Load from local file
+                if not os.path.exists(config):
+                    raise FileNotFoundError(f"Configuration file not found: {config}")
+                self.config = load_configuration(config)
+                self.config_source = f"file: {config}"
         elif isinstance(config, dict):
             self.config = config.copy()
             self.config_source = "dictionary"
         else:
-            raise TypeError("config must be a file path (str) or dictionary")
+            raise TypeError("config must be a file path (str), URL (str), or dictionary")
         
         # Initialize state
         self.data = None
@@ -66,6 +76,33 @@ class CoxModelWrapper:
         logger.info(f"Configuration loaded from {self.config_source}")
         logger.info(f"Outcome: {self.outcome_name}")
         logger.info(f"Features: {len(self.feature_names)} features configured")
+    
+    def _load_config_from_url(self, url: str) -> Dict:
+        """
+        Load configuration from a URL.
+        
+        Args:
+            url: URL to the YAML configuration file
+            
+        Returns:
+            Dict containing the configuration
+        """
+        try:
+            logger.info(f"Downloading configuration from: {url}")
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()  # Raises an HTTPError for bad responses
+            
+            # Parse YAML content
+            config = yaml.safe_load(response.text)
+            logger.info("Configuration downloaded and parsed successfully")
+            return config
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to download configuration from URL: {e}")
+            raise RuntimeError(f"Failed to download configuration from URL: {e}")
+        except yaml.YAMLError as e:
+            logger.error(f"Failed to parse YAML from URL: {e}")
+            raise RuntimeError(f"Failed to parse YAML from URL: {e}")
     
     def load_data(self):
         """

@@ -21,13 +21,14 @@ def test_wrapper_import():
         return False
 
 def test_wrapper_config_loading():
-    """Test wrapper initialization with config file."""
-    print("\nTesting wrapper config loading...")
+    """Test wrapper initialization with config URL."""
+    print("\nTesting wrapper config loading from URL...")
     try:
         from twinsight_model.wrapper import CoxModelWrapper
         
-        # Test with existing config file
-        wrapper = CoxModelWrapper('configuration_cox.yaml')
+        # Test with URL config
+        config_url = 'https://raw.githubusercontent.com/oneilsh/regression_model/refs/heads/main/configuration_cox.yaml'
+        wrapper = CoxModelWrapper(config_url)
         
         print(f"✓ Wrapper initialized: {wrapper}")
         print(f"  - Outcome: {wrapper.outcome_name}")

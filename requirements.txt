@@ -5,8 +5,12 @@
 # Cox regression library (not in AoU base) - using 0.27.5 for pandas 2.0.3 compatibility
 lifelines==0.27.5
 
+# Dependencies for lifelines will be handled by pip install lifelines==0.27.5
+
 # BigQuery access (AoU provides older version, we may need newer)
 google-cloud-bigquery>=2.34.4
+
+# HTTP requests for loading config from URLs (AoU provides requests==2.32.3)
 
 # Keep protobuf pinned to avoid conflicts (AoU has 3.20.2)
 protobuf>=3.20.0,<4.0.0
