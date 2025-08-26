@@ -2,8 +2,8 @@
 # AoU provides: pandas=2.0.3, numpy=1.24.4, scikit-learn=1.6.0, 
 # matplotlib=3.7.3, seaborn=0.12.2, joblib=1.4.2, PyYAML=6.0.1
 
-# Cox regression library (not in AoU base)
-lifelines>=0.30.0
+# Cox regression library (not in AoU base) - using 0.29.0 for pandas 2.0.3 compatibility
+lifelines==0.29.0
 
 # BigQuery access (AoU provides older version, we may need newer)
 google-cloud-bigquery>=2.34.4

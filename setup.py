@@ -12,7 +12,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         # Only non-AoU dependencies - AoU provides pandas, numpy, scikit-learn, pyyaml, joblib
-        'lifelines>=0.30.0',
+        'lifelines==0.29.0',  # Pinned for pandas 2.0.3 compatibility
         'google-cloud-bigquery>=2.34.4',
         'protobuf>=3.20.0,<4.0.0',
     ],
