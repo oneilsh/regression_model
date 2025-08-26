@@ -2,17 +2,30 @@
 
 This guide provides step-by-step instructions for installing twinsight_model v0.2.0 in the AoU environment.
 
-## Quick Start (Recommended)
+## ✅ Recommended Installation (Tested & Working)
 
-### Step 1: Install from GitHub
-```bash
-pip install git+https://github.com/yourusername/regression_model.git@v0.2.0
+### Step 1: Run the Fix Script
+```python
+# In a Jupyter cell, run this one-liner:
+exec(open('fix_installation.py').read())
 ```
 
 ### Step 2: Test Installation
 ```python
-# Run this in a new notebook cell
-exec(open('test_install.py').read())
+# Run the smoke test
+exec(open('basic_smoke_test.py').read())
+```
+
+## Alternative: Manual Installation
+
+### Step 1: Install from GitHub
+```bash
+pip install git+https://github.com/oneilsh/regression_model.git
+```
+
+### Step 2: If you get dependency conflicts, fix them:
+```python
+exec(open('fix_installation.py').read())
 ```
 
 ## Detailed Installation (If Quick Start Fails)
