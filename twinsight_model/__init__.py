@@ -9,5 +9,10 @@ This version focuses on:
 
 __version__ = "0.2.0"
 
-# For now, preserve existing imports to avoid breaking current code
-# TODO: In future versions, replace with: from .wrapper import CoxModelWrapper
+# New simplified API (recommended)
+from .wrapper import CoxModelWrapper
+
+# Legacy imports (for backward compatibility)
+# from .dataloader_cox import load_configuration, load_data_from_bigquery
+# from .preprocessing_cox import create_preprocessor, apply_preprocessing  
+# from .model_cox import run_end_to_end_pipeline
