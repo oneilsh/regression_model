@@ -8,9 +8,7 @@ import inspect
 import pickle
 from datetime import datetime
 
-# --- MLflow Imports ---
-import mlflow
-import mlflow.pyfunc
+# MLflow removed for v0.2.0 - using simple pickle persistence
 # --- Lifelines Imports for Cox PH ---
 from lifelines import CoxPHFitter
 from lifelines.utils import concordance_index # For explicit C-index calculation

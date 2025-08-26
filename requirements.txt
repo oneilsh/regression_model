@@ -1,23 +1,15 @@
-# Core dependencies from pyproject.toml
-pandas==2.3.1
-numpy==2.2.6
-scikit-learn==1.7.1
-lifelines==0.30.0
-pyarrow==9.0.0
-google-cloud-bigquery==3.35.1
-PyYAML==6.0.2
+# Only dependencies NOT provided by AoU base image
+# AoU provides: pandas=2.0.3, numpy=1.24.4, scikit-learn=1.6.0, 
+# matplotlib=3.7.3, seaborn=0.12.2, joblib=1.4.2, PyYAML=6.0.1
 
-# Additional dependencies discovered through testing
-mlflow==2.13.0
-protobuf==3.20.0
-packaging==21.3
+# Cox regression library (not in AoU base)
+lifelines>=0.30.0
 
-# Other common dependencies you've used (can be removed if not needed)
-matplotlib==3.7.3
-seaborn==0.11.0
-joblib==1.5.1
-click==8.1.8
-tqdm==4.62.0
+# BigQuery access (AoU provides older version, we may need newer)
+google-cloud-bigquery>=2.34.4
+
+# Keep protobuf pinned to avoid conflicts (AoU has 3.20.2)
+protobuf>=3.20.0,<4.0.0
 
 
 
